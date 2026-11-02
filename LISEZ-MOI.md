@@ -1,6 +1,8 @@
 # PhantomStation
 
-Deux archives sont proposées dans le [brouillon privé GitHub](https://github.com/NovalysDev/PhantomStation/releases). **La version portable** comprend les moteurs et outils nécessaires : extraire l’archive dans son propre dossier, puis ouvrir `PhantomStation.exe`. **L’archive des sources**, beaucoup plus légère, ne comprend ni l’EXE ni les dépendances ; elle sert au développement et ne peut pas être utilisée seule. Ces versions restent expérimentales.
+**Pour utiliser PhantomStation :** télécharge `PhantomStation-portable-essai.zip` dans le [brouillon privé GitHub](https://github.com/NovalysDev/PhantomStation/releases), extrais-le dans un dossier et ouvre `PhantomStation.exe`. Les moteurs et outils sont inclus.
+
+**Pour les développeurs :** `PhantomStation-sources-sans-dependances.zip` contient les sources, sans l’EXE ni les outils ; il ne fonctionne pas seul. Ces versions restent expérimentales.
 
 PhantomStation propose la création de jeux PS1, PS2, NES, Super Nintendo et Nintendo 64. GoldenEye 007 Europe utilise un portage particulier ; les autres jeux N64 utilisent un moteur commun expérimental. La création d’un EXE ne garantit pas que le jeu entier fonctionne.
 

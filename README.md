@@ -6,10 +6,11 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 > **Development snapshot:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The present repository is a private source snapshot for further development; it is not a ready-to-install release.
 
-Two archives are available in the [private test draft](https://github.com/NovalysDev/PhantomStation/releases):
+## Which download should I choose?
 
-- **PhantomStation-portable-essai.zip** is the Windows test package with Python, Git, compilers and the available console engines included. Extract it into its own folder and run `PhantomStation.exe`. It is approximately 836 MiB compressed and 2.4 GiB extracted; building games requires additional space.
-- **PhantomStation-sources-sans-dependances.zip** is a smaller source snapshot for development. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot be used as a standalone application. Its source, upstream version pins and local patches are also available in this repository.
+**To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [private test draft](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
+
+**For developers only:** `PhantomStation-sources-sans-dependances.zip` contains a smaller source snapshot. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot run by itself. Its source, upstream version pins and local patches are also available in this repository.
 
 The portable package has been tested locally, not yet on a clean independent PC. Both archives are experimental; no public stable release has been published. Game images and user saves are not included. Before any public distribution, third-party components and media, including the GoldenEye port, still require a review of their redistribution terms.
 

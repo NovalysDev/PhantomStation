@@ -1,5 +1,5 @@
 """Construction et emballage expérimental d'un jeu PS2 dans PhantomStation."""
-import base64, hashlib, json, os, re, shutil, struct, subprocess, tempfile, threading, time, urllib.parse, urllib.request, uuid, zipfile
+import base64, hashlib, io, json, os, re, shutil, struct, subprocess, tempfile, threading, time, urllib.parse, urllib.request, uuid, zipfile
 from pathlib import Path
 from PIL import Image
 from emballer import _decode_cover
@@ -7,6 +7,7 @@ from emballer import _decode_cover
 BASE = Path(__file__).resolve().parent
 ENGINE = BASE / 'ps2-native-recomp'
 PYTHON = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Microsoft.NET' / 'Framework64' / 'v4.0.30319' / 'csc.exe'
+WINDOWS_EXE_LIMIT = 1 << 32  # CreateProcess rejects files of 4 GiB or larger.
 
 
 def windows_environment():
@@ -257,6 +258,10 @@ def find_ps2_codes(serial, elf, log):
 
 
 def build_stub(icon, output, temp, background=None):
+    from phantom_intro import visible_ps2_logo
+    visible_logo = temp / 'logo-ps2-lisible.png'
+    with Image.open(BASE / 'assets/logo-ps2.png') as logo:
+        visible_ps2_logo(logo).save(visible_logo)
     ps2_sound = BASE / 'assets/son-demarrage-ps2.wav'
     if not ps2_sound.is_file():
         raise RuntimeError('Son de démarrage PS2 introuvable. Sélectionne un fichier WAV PS2 dans le compilateur.')
@@ -281,11 +286,79 @@ def build_stub(icon, output, temp, background=None):
             chosen.convert('RGB').save(artwork, format='PNG')
     cmd = [str(PYTHON), '/nologo', '/target:winexe', '/out:' + str(output), '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll',
            '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll', '/win32icon:' + str(icon),
-           '/resource:' + str(artwork) + ',art', '/resource:' + str(BASE/'assets/logo-ps2.png') + ',logo',
+           '/resource:' + str(artwork) + ',art', '/resource:' + str(visible_logo) + ',logo',
            '/resource:' + str(ps2_sound) + ',sound', str(source), str(BASE/'phantom_ps2_launcher.cs'),
            str(BASE/'phantom_ps2_settings.cs'), str(BASE/'phantom_embedded_game.cs')]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode: raise RuntimeError('Création du lanceur PS2 impossible : ' + result.stdout.strip())
+
+
+def large_game_launcher(package):
+    """Build a small launcher that reads an existing oversized PS2 package in place."""
+    package = Path(package).resolve(strict=True)
+    from bibliotheque import game_info
+    if game_info(package, include_cover=False)['platform'] != 'PS2':
+        raise ValueError('Ce jeu dépasse 4 Gio. L’ouverture des anciens fichiers volumineux est disponible pour les jeux PS2.')
+    before = package.stat()
+    with tempfile.TemporaryDirectory(prefix='phantom-grand-jeu-') as td:
+        work = Path(td)
+        with zipfile.ZipFile(package) as archive:
+            entries = archive.infolist()
+            if len({entry.filename for entry in entries}) != len(entries):
+                raise ValueError('Archive du jeu invalide : fichiers en double.')
+            offset = min(entry.header_offset for entry in entries)
+            if not 0 < offset < 64 * 1024 * 1024:
+                raise ValueError('Le lanceur de ce jeu est invalide.')
+            cover_entry = archive.getinfo('assets/img/boxart.png')
+            if cover_entry.file_size > 8 * 1024 * 1024:
+                raise ValueError('La jaquette du jeu est trop volumineuse.')
+            cover = _decode_cover(archive.read(cover_entry)).convert('RGBA')
+            cover.thumbnail((256, 256), Image.Resampling.LANCZOS)
+            square = Image.new('RGBA', (256, 256), (4, 10, 24, 255))
+            square.alpha_composite(cover, ((256-cover.width)//2, (256-cover.height)//2))
+            icon = work / 'icone.ico'
+            square.save(icon, format='ICO', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
+            old_stub = work / 'ancien-lanceur.exe'
+            with package.open('rb') as original, old_stub.open('wb') as output:
+                left = offset
+                while left:
+                    block = original.read(min(left, 4 * 1024 * 1024))
+                    if not block: raise ValueError('Lanceur de jeu incomplet.')
+                    output.write(block); left -= len(block)
+        background = work / 'fond.png'
+        env = os.environ.copy()
+        env['PHANTOM_SOURCE_STUB'] = str(old_stub)
+        env['PHANTOM_ART_OUT'] = str(background)
+        script = r'''$ErrorActionPreference='Stop'
+$a=[Reflection.Assembly]::LoadFile($env:PHANTOM_SOURCE_STUB)
+$s=$a.GetManifestResourceStream('art')
+if ($null -eq $s) { throw 'Fond du jeu absent.' }
+$f=[IO.File]::Create($env:PHANTOM_ART_OUT)
+try { $s.CopyTo($f) } finally { $f.Dispose(); $s.Dispose() }'''
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                env=env, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode: raise OSError('Impossible de lire le fond du jeu.')
+        digest = hashlib.sha256()
+        for item in (old_stub, icon, BASE/'unique_launcher.cs', BASE/'phantom_ps2_launcher.cs',
+                     BASE/'phantom_ps2_settings.cs', BASE/'phantom_embedded_game.cs',
+                     BASE/'assets/logo-ps2.png', BASE/'assets/son-demarrage-ps2.wav'):
+            with item.open('rb') as stream: digest.update(hashlib.file_digest(stream, 'sha256').digest())
+        cache = Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local')) / 'PhantomStation' / 'Lanceurs-volumineux'
+        cache.mkdir(parents=True, exist_ok=True)
+        launcher = cache / ('ps2-' + digest.hexdigest()[:24] + '.exe')
+        if not launcher.is_file():
+            built = work / 'lanceur.exe'
+            build_stub(icon, built, work, background)
+            temporary = cache / (launcher.name + '.' + uuid.uuid4().hex + '.tmp')
+            try:
+                shutil.copyfile(built, temporary)
+                try: os.rename(temporary, launcher)
+                except FileExistsError: pass
+            finally: temporary.unlink(missing_ok=True)
+        after = package.stat()
+        if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise OSError('Le fichier du jeu a changé pendant sa préparation.')
+        return launcher
 
 
 def package_ps2(name, iso, runtime, elf, serial, output, icon_path=None, log=lambda s: None, progress=None, background=None, package_id=None, players=2):
@@ -333,13 +406,17 @@ def package_ps2(name, iso, runtime, elf, serial, output, icon_path=None, log=lam
                       ('ps2-codes-defaut.tsv', codes.encode('utf-8')),
                       ('licences/source-codes-ps2.txt', ('\n'.join(sources) + '\n').encode('utf-8'))]
             total = sum(p.stat().st_size for p, _ in files) + sum(len(data) for _, data in inline)
+            compress_disc = partial.stat().st_size + total + 1024 * 1024 >= WINDOWS_EXE_LIMIT
+            if compress_disc:
+                log('Compression du disque PS2 pour que le fichier unique puisse être lancé sous Windows…\n')
             done = 0; last = -1
             with zipfile.ZipFile(partial, 'a', compression=zipfile.ZIP_DEFLATED, compresslevel=3, allowZip64=True) as archive:
                 for filename, data in inline:
                     archive.writestr(filename, data); done += len(data)
                 for src, filename in files:
                     info = zipfile.ZipInfo.from_file(src, filename)
-                    info.compress_type = zipfile.ZIP_STORED if filename == 'media/disque.iso' else zipfile.ZIP_DEFLATED
+                    info.compress_type = zipfile.ZIP_STORED if filename == 'media/disque.iso' and not compress_disc else zipfile.ZIP_DEFLATED
+                    info._compresslevel = 3
                     with src.open('rb') as reader, archive.open(info, 'w', force_zip64=True) as writer:
                         while True:
                             block = reader.read(4*1024*1024)
@@ -350,6 +427,8 @@ def package_ps2(name, iso, runtime, elf, serial, output, icon_path=None, log=lam
                     state = src.stat()
                     if snapshots[src] != (state.st_size, state.st_mtime_ns, state.st_ino):
                         raise RuntimeError('Un fichier du jeu a changé pendant la création : ' + str(src))
+            if partial.stat().st_size >= WINDOWS_EXE_LIMIT:
+                log('Le jeu dépasse encore 4 Gio après compression : lance-le depuis la bibliothèque PhantomStation.\n')
             log('Vérification du fichier unique PS2…\n')
             done = 0; last = -1
             with zipfile.ZipFile(partial) as archive:

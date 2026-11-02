@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -77,6 +78,62 @@ def _sevenzip():
     return next((p for p in candidates if p and Path(p).is_file()), None)
 
 
+def _windows_tar():
+    system = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'tar.exe'
+    if system.is_file():
+        return str(system)
+    return None
+
+
+def _bounded_output(command, maximum, timeout=20):
+    """Read a bounded amount from an archive tool and stop stalled processes."""
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    expired = threading.Event()
+    def stop():
+        expired.set()
+        try:
+            process.kill()
+        except OSError:
+            pass
+    timer = threading.Timer(timeout, stop)
+    timer.daemon = True
+    timer.start()
+    try:
+        output = process.stdout.read(maximum + 1)
+        if len(output) > maximum:
+            try:
+                process.kill()
+            except OSError:
+                pass
+            raise ValueError('Contenu de l’archive SBI trop volumineux.')
+        code = process.wait()
+        if expired.is_set():
+            raise ValueError('Lecture de l’archive SBI trop longue.')
+        if code:
+            raise ValueError('Impossible de lire l’archive SBI.')
+        return output
+    finally:
+        timer.cancel()
+        process.stdout.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
+def _select_archive_entry(entries, serial):
+    entries = [name for name in entries if name.lower().endswith('.sbi')]
+    if not entries or len(entries) > 40:
+        raise ValueError('Aucun fichier SBI adapté dans l’archive.')
+    needle = re.sub(r'[^A-Z0-9]', '', serial.upper())
+    exact = [name for name in entries if needle in re.sub(r'[^A-Z0-9]', '', Path(name).stem.upper())]
+    if len(exact) == 1:
+        return exact[0]
+    if not exact and len(entries) == 1:
+        return entries[0]
+    raise ValueError('Plusieurs fichiers SBI possibles : sélection manuelle nécessaire.')
+
+
 def download_sbi(serial, urls):
     if len(urls) != 1:
         raise ValueError('Plusieurs éditions existent : sélectionne le SBI correspondant à ton disque.')
@@ -84,8 +141,9 @@ def download_sbi(serial, urls):
     if parts.scheme != 'https' or parts.hostname != 'psxdatacenter.com' or not parts.path.startswith('/sbifiles/') or not parts.path.lower().endswith('.7z'):
         raise ValueError('Adresse du fichier SBI non reconnue.')
     sevenzip = _sevenzip()
-    if not sevenzip:
-        raise ValueError('7-Zip est nécessaire pour extraire automatiquement ce SBI.')
+    tar = _windows_tar() if not sevenzip else None
+    if not sevenzip and not tar:
+        raise ValueError('Impossible d’ouvrir automatiquement l’archive SBI sur ce PC.')
     url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, urllib.parse.quote(urllib.parse.unquote(parts.path), safe='/'), '', ''))
     request = urllib.request.Request(url, headers={'User-Agent': 'PhantomStation/1.0'})
     with urllib.request.urlopen(request, timeout=15) as response:
@@ -95,9 +153,13 @@ def download_sbi(serial, urls):
     with tempfile.TemporaryDirectory(prefix='phantom-sbi-') as tmp:
         archive = Path(tmp) / 'source.7z'
         archive.write_bytes(blob)
-        result = subprocess.run([sevenzip, 'l', '-slt', str(archive)], capture_output=True, text=True,
-                                encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW, timeout=20, check=True)
-        listings = result.stdout.split('----------', 1)
+        if tar:
+            listing = _bounded_output([tar, '-tf', str(archive)], 256 * 1024).decode('utf-8', errors='strict')
+            selected = _select_archive_entry(listing.splitlines(), serial)
+            output = _bounded_output([tar, '-xOf', str(archive), '--', selected], MAX_SBI)
+            return validate_sbi(output)
+        listing = _bounded_output([sevenzip, 'l', '-slt', str(archive)], 256 * 1024)
+        listings = listing.decode('utf-8', errors='replace').split('----------', 1)
         if len(listings) != 2:
             raise ValueError('Contenu de l’archive SBI illisible.')
         entries = []
@@ -106,19 +168,9 @@ def download_sbi(serial, urls):
             name, size = fields.get('Path', ''), fields.get('Size', '')
             if name.lower().endswith('.sbi') and size.isdigit() and 0 < int(size) <= MAX_SBI:
                 entries.append(name)
-        if not entries or len(entries) > 40:
-            raise ValueError('Aucun fichier SBI adapté dans l’archive.')
-        needle = re.sub(r'[^A-Z0-9]', '', serial.upper())
-        exact = [name for name in entries if needle in re.sub(r'[^A-Z0-9]', '', Path(name).stem.upper())]
-        if len(exact) == 1:
-            selected = exact[0]
-        elif not exact and len(entries) == 1:
-            selected = entries[0]
-        else:
-            raise ValueError('Plusieurs fichiers SBI possibles : sélection manuelle nécessaire.')
-        output = subprocess.run([sevenzip, 'x', '-so', '-bd', str(archive), '--', selected], capture_output=True,
-                                creationflags=subprocess.CREATE_NO_WINDOW, timeout=20, check=True)
-        return validate_sbi(output.stdout)
+        selected = _select_archive_entry(entries, serial)
+        output = _bounded_output([sevenzip, 'x', '-so', '-bd', str(archive), '--', selected], MAX_SBI)
+        return validate_sbi(output)
 
 
 def resolve_sbi(cue, serial, manual, disc_count, index, log):
@@ -147,7 +199,15 @@ def resolve_sbi(cue, serial, manual, disc_count, index, log):
             log('SBI trouvé dans le catalogue local pour ' + serial + '.\n')
             return data
     urls = index[serial].get('urls', [])
-    if len(urls) != 1:
-        raise ValueError('Plusieurs versions existent ou aucun téléchargement fiable n’est répertorié.')
+    if not urls or len(urls) > 8:
+        raise ValueError('Aucun téléchargement SBI fiable n’est répertorié.')
     log('Recherche automatique du SBI pour ' + serial + ' auprès de PSX Data Center…\n')
-    return download_sbi(serial, urls)
+    if len(urls) == 1:
+        return download_sbi(serial, urls)
+    # A shared serial can identify several editions. Only use the automatic
+    # result if every listed edition supplies the exact same validated bytes.
+    variants = [download_sbi(serial, [url]) for url in urls]
+    if any(data != variants[0] for data in variants[1:]):
+        raise ValueError('Plusieurs versions SBI différentes existent : choisis celle de ton disque.')
+    log('Les versions SBI disponibles sont identiques.\n')
+    return variants[0]

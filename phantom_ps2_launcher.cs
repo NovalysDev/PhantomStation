@@ -74,7 +74,7 @@ class Ps2GameForm : Form {
             });
         };
         panel.Controls.Add(settings);
-        using (var archive = ZipFile.OpenRead(Application.ExecutablePath)) {
+        using (var archive = ZipFile.OpenRead(UniqueLauncher.PackagePath)) {
             var cover = archive.GetEntry("assets/img/boxart.png");
             if (cover != null) using (var input = cover.Open()) using (var buffer = new MemoryStream()) {
                 input.CopyTo(buffer); buffer.Position = 0;
@@ -115,7 +115,7 @@ class Ps2GameForm : Form {
         if (File.Exists(card)) return;
         string temp = card + "." + Guid.NewGuid().ToString("N") + ".part";
         try {
-            using (var archive = ZipFile.OpenRead(Application.ExecutablePath)) {
+            using (var archive = ZipFile.OpenRead(UniqueLauncher.PackagePath)) {
                 var blank = archive.GetEntry("ps2-carte-vierge.ps2");
                 if (blank == null) throw new IOException("Carte mémoire PS2 initiale absente.");
                 using (var input = blank.Open()) using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) input.CopyTo(output);
@@ -148,7 +148,7 @@ class Ps2GameForm : Form {
             await session.Run(start, true, full);
             status.Text = "";
         } catch (Exception ex) {
-            MessageBox.Show("Impossible de lancer le jeu :\n" + ex.Message, "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            PhantomLaunchReport.Show(this, ex, game);
             status.Text = "Lancement impossible.";
         } finally { play.Enabled = true; scale.Enabled = true; fullscreen.Enabled = true; }
     }
@@ -214,7 +214,7 @@ class Ps2CodesForm : Form {
         if (File.Exists(UserFile)) lines = File.ReadAllLines(UserFile);
         else {
             var defaults = new List<string>();
-            using (var archive = ZipFile.OpenRead(Application.ExecutablePath)) {
+            using (var archive = ZipFile.OpenRead(UniqueLauncher.PackagePath)) {
                 var entry = archive.GetEntry("ps2-codes-defaut.tsv");
                 if (entry != null) using (var reader = new StreamReader(entry.Open())) {
                     string line; while ((line = reader.ReadLine()) != null) defaults.Add(line);

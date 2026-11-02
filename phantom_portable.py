@@ -7,6 +7,37 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+_UTF8_CONSOLE_RUNNER = (
+    "import ctypes,subprocess,sys;"
+    "k=ctypes.windll.kernel32;"
+    "ok=k.SetConsoleCP(65001) and k.SetConsoleOutputCP(65001);"
+    "sys.exit(subprocess.call(sys.argv[1:]) if ok else 125)"
+)
+
+
+def utf8_build_command(command, python):
+    """Launch build steps under a private UTF-8 Windows console."""
+    args = [str(item) for item in command]
+    if os.name != 'nt':
+        return args
+    return [str(python), '-u', '-c', _UTF8_CONSOLE_RUNNER, *args]
+
+
+def prepare_ps1_unicode(project):
+    """Make the generated-source check read UTF-8 paths without splitting them."""
+    script = Path(project) / 'psxrecomp/runtime/check_generated_sources.cmake'
+    if not script.is_file():
+        raise FileNotFoundError('Le contrôle des sources PS1 est introuvable.')
+    original = 'file(STRINGS "${SOURCES_FILE}" _sources)'
+    corrected = 'file(STRINGS "${SOURCES_FILE}" _sources ENCODING UTF-8)'
+    text = script.read_text(encoding='utf-8')
+    if text.count(corrected) == 1 and original not in text:
+        return
+    if text.count(original) != 1 or corrected in text:
+        raise ValueError('Le contrôle des sources PS1 a changé ; correction UTF-8 impossible.')
+    script.write_text(text.replace(original, corrected, 1), encoding='utf-8', newline='\n')
+
+
 def configure_portable_tools(base):
     base = Path(base)
     git_root = base / 'outils' / 'git-portable'

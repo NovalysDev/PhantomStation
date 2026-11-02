@@ -4,6 +4,7 @@ from ctypes import wintypes
 import os
 import subprocess
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox
 
 from phantom_ui import ctk, button, BG, MUTED, TEXT
@@ -50,11 +51,20 @@ class GameInCompiler:
     def start(self, exe, env=None):
         if self.process is not None:
             raise ValueError('Un jeu est déjà ouvert dans PhantomStation.')
+        exe = Path(exe)
+        actual = exe
+        environment = os.environ.copy() if env is None else env.copy()
+        environment.pop('PHANTOM_PACKAGE_PATH', None)
+        from phantom_ps2 import WINDOWS_EXE_LIMIT
+        if exe.stat().st_size >= WINDOWS_EXE_LIMIT:
+            from phantom_ps2 import large_game_launcher
+            actual = large_game_launcher(exe)
+            environment['PHANTOM_PACKAGE_PATH'] = str(exe.resolve())
         self.job = kernel32.CreateJobObjectW(None, None)
         if not self.job:
             raise OSError(ctypes.get_last_error(), 'Impossible de préparer la fenêtre du jeu.')
         try:
-            self.process = subprocess.Popen([str(exe)], cwd=str(exe.parent), env=env)
+            self.process = subprocess.Popen([str(actual)], cwd=str(exe.parent), env=environment)
             if not kernel32.AssignProcessToJobObject(self.job, HANDLE(int(self.process._handle))):
                 raise OSError(ctypes.get_last_error(), 'Impossible de suivre les fenêtres de ce jeu.')
         except Exception:

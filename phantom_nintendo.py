@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 import urllib.parse
 import urllib.request
 import uuid
@@ -69,6 +70,42 @@ def configure_engine():
     nes._dependencies = dependencies
 
 
+def cover_catalogue_matches(system, names):
+    """Find exact game titles when the catalogue adds a region or revision."""
+    def key(value):
+        value = re.sub(r'\s*[\(\[].*?[\)\]]', '', value).casefold()
+        value = unicodedata.normalize('NFKD', value)
+        return ''.join(ch for ch in value if ch.isalnum())
+
+    wanted = {key(value) for value in names if key(value)}
+    if not wanted:
+        return []
+    api = 'https://api.github.com/repos/libretro-thumbnails/' + system + '/git/trees/'
+    def get_json(url):
+        request = urllib.request.Request(url, headers={'User-Agent': 'PhantomStation/1.0', 'Accept': 'application/vnd.github+json'})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            raw = response.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024:
+            raise ValueError('Catalogue de jaquettes trop volumineux.')
+        return json.loads(raw)
+    try:
+        root = get_json(api + 'master')
+        boxarts = next(entry['sha'] for entry in root['tree'] if entry['path'] == 'Named_Boxarts' and entry['type'] == 'tree')
+        tree = get_json(api + boxarts)
+        if tree.get('truncated'):
+            return []
+        titles = [Path(entry['path']).stem for entry in tree['tree']
+                  if entry.get('type') == 'blob' and entry['path'].lower().endswith('.png')
+                  and key(Path(entry['path']).stem) in wanted]
+        def rank(title):
+            lower = title.casefold()
+            return (0 if '(europe)' in lower else 1 if '(world)' in lower else 2,
+                    'virtual console' in lower, len(title), lower)
+        return sorted(titles, key=rank)[:5]
+    except (OSError, ValueError, KeyError, TypeError, StopIteration):
+        return []
+
+
 def make_art(platform, rom, name, chosen, work, log):
     source = _decode_cover(Path(chosen).read_bytes()) if chosen else None
     if source is None:
@@ -77,20 +114,32 @@ def make_art(platform, rom, name, chosen, work, log):
                   'N64': 'Nintendo_-_Nintendo_64'}[platform]
         base = 'https://raw.githubusercontent.com/libretro-thumbnails/' + system + '/master/Named_Boxarts/'
         stripped = re.sub(r'\s*\([^)]*\)', '', rom.stem).strip()
-        for title in dict.fromkeys((rom.stem, stripped + ' (Europe)', stripped, name + ' (Europe)', name)):
+        tried = set()
+        def fetch(title):
+            nonlocal source
+            if title in tried:
+                return False
+            tried.add(title)
             try:
                 with urllib.request.urlopen(urllib.request.Request(base + urllib.parse.quote(title + '.png'), headers={'User-Agent':'PhantomStation/1.0'}), timeout=4) as response:
                     raw = response.read(8 * 1024 * 1024 + 1)
                 if len(raw) > 8 * 1024 * 1024:
-                    continue
+                    return False
                 source = _decode_cover(raw)
                 log('Jaquette trouvée : ' + title)
-                break
+                return True
             except (OSError, ValueError):
-                continue
+                return False
+        for title in (rom.stem, stripped + ' (Europe)', stripped, name + ' (Europe)', name):
+            if fetch(title):
+                break
+        if source is None:
+            for title in cover_catalogue_matches(system, (rom.stem, name)):
+                if fetch(title):
+                    break
     if source is None:
         source = _decode_cover((BASE / 'assets/phantom-startup.png').read_bytes())
-        log('Jaquette introuvable : image PhantomStation utilisée.')
+        log('Jaquette introuvable ou téléchargement impossible : image PhantomStation utilisée. Tu peux choisir une jaquette manuellement.')
     source.convert('RGBA').save(work / 'boxart.png')
     source.convert('RGBA').save(work / 'boxart.tga')
     source.thumbnail((256, 256), Image.Resampling.LANCZOS)

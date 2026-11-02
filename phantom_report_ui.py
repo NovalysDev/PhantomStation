@@ -16,7 +16,7 @@ def open_report_dialog(parent, failure):
             messagebox.showerror('Rapport impossible', 'Impossible d’enregistrer le rapport :\n' + str(exc), parent=parent)
             return
     path = failure['path']
-    payload, shortened = submission_payload(failure['game'], failure['text'])
+    payload, shortened = submission_payload(failure['game'], failure['text'], failure.get('kind', 'compilation'))
     dialog = tk.Toplevel(parent)
     dialog.title('Rapport d’erreur — PhantomStation')
     dialog.configure(bg=BG)

@@ -12,6 +12,17 @@ ASSETS = Path(__file__).resolve().parent / 'assets'
 DURATION = 8.4
 
 
+def visible_ps2_logo(image):
+    """Make the black PS2 wordmark legible on PhantomStation's dark artwork."""
+    image = image.convert('RGBA')
+    pixels = bytearray(image.tobytes())
+    for pos in range(0, len(pixels), 4):
+        red, green, blue, alpha = pixels[pos:pos + 4]
+        if alpha and max(red, green, blue) < 45:
+            pixels[pos:pos + 3] = bytes((222, 241, 255))
+    return Image.frombytes('RGBA', image.size, bytes(pixels))
+
+
 class CompilationProgress:
     """Progression globale pondérée par étapes, toujours croissante.
 
@@ -86,6 +97,8 @@ class PhantomIntro:
         self.canvas.pack(fill='both', expand=True)
         self.source = Image.open(ASSETS / 'phantom-startup.png').convert('RGB')
         self.logo = Image.open(logo_path or ASSETS / 'playstation-logo.png').convert('RGBA')
+        if logo_path and Path(logo_path).name.lower() == 'logo-ps2.png':
+            self.logo = visible_ps2_logo(self.logo)
         scale = max(self.width/self.source.width, self.height/self.source.height)
         w, h = round(self.source.width*scale), round(self.source.height*scale)
         background = self.source.resize((w, h), Image.Resampling.LANCZOS)

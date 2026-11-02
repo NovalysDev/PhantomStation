@@ -13,7 +13,7 @@ import wave
 import tomllib
 import tkinter as tk
 from pathlib import Path
-from phantom_portable import configure_portable_tools, local_ps1_dependencies, stage_ps1_archives
+from phantom_portable import configure_portable_tools, local_ps1_dependencies, prepare_ps1_unicode, stage_ps1_archives, utf8_build_command
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 from phantom_intro import PhantomIntro
@@ -26,7 +26,7 @@ from phantom_window_icon import set_process_identity, set_window_icon
 from phantom_report_ui import open_report_dialog
 from phantom_update_ui import start_update_check
 from phantom_ps2 import build_ps2, package_ps2, cleanup_ps2_build, ENGINE as PS2_ENGINE
-from rapport_erreur import report_text, save_report
+from rapport_erreur import report_text, launch_report_text, save_report
 from emballer import package_game, _cue_files
 from installer_bios import install_phantom_bios
 from installer_intro import install_intro_hook
@@ -146,6 +146,8 @@ def build_environment():
     env['PSXRECOMP_TOOLCHAIN_DIR'] = str(TOOLCHAIN)
     env['PSXRECOMP_PYTHON'] = str(PYTHON)
     env['CMAKE_BUILD_PARALLEL_LEVEL'] = '2'
+    env['PYTHONUTF8'] = '1'
+    env['PYTHONIOENCODING'] = 'utf-8'
     env['PATH'] = str(TOOLCHAIN / 'bin') + os.pathsep + str(PYTHON.parent) + os.pathsep + env.get('PATH', '')
     git_bash = Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'Git' / 'bin'
     if (git_bash / 'bash.exe').exists(): env['PATH'] += os.pathsep + str(git_bash)
@@ -443,6 +445,48 @@ Add-Type -AssemblyName Microsoft.VisualBasic
         raise OSError('Impossible de déplacer le dossier dans la Corbeille : ' + str(exc)) from exc
     if result.returncode or folder.exists():
         raise OSError((result.stderr or result.stdout or 'Le dossier n’a pas été déplacé.').strip())
+
+
+def original_files_unchanged(records, protected):
+    """Allow individual originals in a shared folder without touching its other files."""
+    if not records:
+        return False
+    try:
+        for path, size, modified, inode in records:
+            item = Path(path)
+            if item != item.resolve(strict=True) or item.is_symlink():
+                return False
+            stat = item.lstat()
+            if (getattr(stat, 'st_file_attributes', 0) & 0x400 or not item.is_file()
+                or (stat.st_size, stat.st_mtime_ns, stat.st_ino) != (size, modified, inode)):
+                return False
+            if any(item == ref or item.is_relative_to(ref) for ref in protected):
+                return False
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def recycle_original_file(path):
+    path = Path(path)
+    env = os.environ.copy()
+    env['PHANTOM_RECYCLE_IMAGE_FILE'] = str(path)
+    script = r'''
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName Microsoft.VisualBasic
+[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
+    $env:PHANTOM_RECYCLE_IMAGE_FILE,
+    [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
+    [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
+'''
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                env=env, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OSError('Impossible de déplacer le fichier dans la Corbeille : ' + str(exc)) from exc
+    if result.returncode or path.exists():
+        raise OSError((result.stderr or result.stdout or 'Le fichier n’a pas été déplacé.').strip())
 
 
 def failed_project_snapshot(project, token, protected, require_marker=True):
@@ -958,10 +1002,32 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             if os.environ.get(var):
                 protected.append(Path(os.environ[var]))
         skipped = []
+        file_protected = [Path(p).resolve() for p in (BASE, PROJECTS, game, self.output_dir)]
+        for var in ('LOCALAPPDATA', 'APPDATA', 'WINDIR', 'ProgramFiles', 'ProgramData'):
+            if os.environ.get(var):
+                file_protected.append(Path(os.environ[var]).resolve())
         for folder, records in groups.items():
             contents = image_folder_contents(folder, records, protected)
             if contents is None:
-                skipped.append(str(folder))
+                if not original_files_unchanged(records, file_protected):
+                    skipped.append(str(folder))
+                    continue
+                listing = '\n'.join('• ' + str(record[0]) for record in records)
+                question = ('Le dossier contient peut-être d’autres fichiers. Veux-tu déplacer uniquement ces fichiers d’origine dans la Corbeille ?\n\n'
+                            + listing + '\n\nLe fonctionnement du jeu doit encore être testé. Tu peux répondre Non pour les garder.')
+                if not messagebox.askyesno('Fichiers du jeu d’origine', question, parent=self.root, default='no'):
+                    continue
+                try:
+                    stat = game.stat()
+                    if (stat.st_size, stat.st_mtime_ns, stat.st_ino) != game_identity or not original_files_unchanged(records, file_protected):
+                        raise OSError('Le jeu ou les fichiers d’origine ont changé ; ils ont été conservés.')
+                    for record in records:
+                        if not original_files_unchanged([record], file_protected):
+                            raise OSError('Un fichier a changé pendant le déplacement. Certains fichiers ont peut-être déjà été déplacés dans la Corbeille.')
+                        recycle_original_file(record[0])
+                    self.status.set('Fichiers d’origine déplacés dans la Corbeille.')
+                except OSError as exc:
+                    messagebox.showerror('Déplacement interrompu', str(exc) + '\nVérifie les fichiers déjà présents dans la Corbeille.', parent=self.root)
                 continue
             listing = '\n'.join('• ' + name + ('/' if is_dir else '') for name, is_dir, *_ in contents)
             question = ('Le jeu a été créé et son fichier vérifié. Veux-tu déplacer ce dossier et tout son contenu dans la Corbeille ?\n\n'
@@ -1055,7 +1121,15 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         try:
             self.game_view.start(Path(path), env=env)
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            messagebox.showerror('Impossible de lancer le jeu', str(exc), parent=self.root)
+            game = Path(path).stem
+            failure = {'game': game, 'kind': 'launch', 'text': launch_report_text(game, path, exc), 'path': None}
+            try:
+                failure['path'] = save_report(failure['text'])
+                detail = '\n\nRapport enregistré : ' + str(failure['path']) + '\n\nVoir ou envoyer le rapport ?'
+                if messagebox.askyesno('Impossible de lancer le jeu', str(exc) + detail, parent=self.root):
+                    open_report_dialog(self.root, failure)
+            except OSError as report_error:
+                messagebox.showerror('Impossible de lancer le jeu', str(exc) + '\n\nRapport non enregistré : ' + str(report_error), parent=self.root)
 
     def select_project(self):
         folder = filedialog.askdirectory(title='Choisir un projet déjà créé', initialdir=str(PROJECTS))
@@ -1271,8 +1345,10 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             self.last_output_by_console[console] = result
             try: register_game(result)
             except OSError as exc: self.events.put(('log', 'Bibliothèque non mise à jour : ' + str(exc) + '\n'))
+            try: images = original_image_snapshot([image], [], BASE / 'descripteurs')
+            except (OSError, ValueError): images = []
             state = result.stat()
-            self.events.put(('done', (True, 'Jeu créé — compatibilité à vérifier en partie.', str(result), [],
+            self.events.put(('done', (True, 'Jeu créé — compatibilité à vérifier en partie.', str(result), images,
                                       (state.st_size, state.st_mtime_ns, state.st_ino))))
         except Exception as exc:
             self.events.put(('log', '\nERREUR Nintendo : ' + str(exc) + '\n'))
@@ -1294,7 +1370,10 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             try: images = original_image_snapshot([image], [], BASE / 'descripteurs')
             except (OSError, ValueError): images = []
             stat = result.stat()
-            self.events.put(('done', (True, 'Programme PS2 créé — compatibilité à vérifier.', str(result), images,
+            from phantom_ps2 import WINDOWS_EXE_LIMIT
+            message = ('Jeu PS2 créé : lance-le depuis la bibliothèque PhantomStation (fichier supérieur à 4 Gio).'
+                       if stat.st_size >= WINDOWS_EXE_LIMIT else 'Programme PS2 créé — compatibilité à vérifier.')
+            self.events.put(('done', (True, message, str(result), images,
                                       (stat.st_size, stat.st_mtime_ns, stat.st_ino))))
         except Exception as exc:
             self.events.put(('log', '\nERREUR PS2 : ' + str(exc) + '\n'))
@@ -1303,7 +1382,8 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
     def run_step(self, cmd, env, cwd, label):
         self.events.put(('phase', label + '…'))
         self.events.put(('log', '\n--- ' + label + ' ---\n'))
-        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
+        command = utf8_build_command(cmd, PYTHON)
+        proc = subprocess.Popen(command, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
         output = []
         in_runtime_build = False
         for line in proc.stdout:
@@ -1373,6 +1453,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                 raise RuntimeError('La génération n’a pas confirmé sa réussite. Consulte le journal.')
             if bundled:
                 stage_ps1_archives(BASE, self.project)
+            prepare_ps1_unicode(self.project)
             if len(cues) > 1:
                 cmd = [str(PYTHON), str(self.project / 'psxrecomp' / 'tools' / 'new_project_layout' / 'update_disc_set.py'), '--game-toml', str(self.project / 'game.toml')] + [str(p) for p in cues]
                 self.run_step(cmd, env, self.project, 'Enregistrement des disques')

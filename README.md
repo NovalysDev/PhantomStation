@@ -4,15 +4,17 @@
 
 PhantomStation brings several existing recompilation and native-port projects into one French-language interface. It can prepare a standalone Windows game package, manage a library, open per-game settings and keep save data outside the package. Its current focus includes European/PAL releases.
 
-> **Development snapshot:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The present repository is a private source snapshot for further development; it is not a ready-to-install release.
+> **Experimental project:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The portable download is a test version, not a stable release.
 
 ## Which download should I choose?
 
-**To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [private test draft](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
+**To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [test release](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
 
 **For developers only:** `PhantomStation-sources-sans-dependances.zip` contains a smaller source snapshot. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot run by itself. Its source, upstream version pins and local patches are also available in this repository.
 
-The portable package has been tested locally, not yet on a clean independent PC. Both archives are experimental; no public stable release has been published. Game images and user saves are not included. Before any public distribution, third-party components and media, including the GoldenEye port, still require a review of their redistribution terms.
+The portable package has been tested locally and on a separate test laptop; compatibility is not established for every game or system. Both archives are experimental; no stable release has been published. Game images and user saves are not included. Third-party components and media, including the GoldenEye port and console startup sounds, have unresolved redistribution questions documented in [the publication review](docs/PUBLICATION_REVIEW.md).
+
+The latest test build improves handling of special characters in build paths, automatic SBI lookup when matching sources agree, console artwork, and reports for launch errors. Large PS2 discs are compressed when needed. If a packaged PS2 game is still 4 GiB or larger, start it from the PhantomStation library: Windows cannot execute that oversized file directly, so the library prepares a small launcher automatically. These changes do not establish that a game will run correctly from start to finish.
 
 ## What it does
 
@@ -108,7 +110,7 @@ Other tests in `tests/` need the corresponding engines, artwork and tooling. Tes
 
 PhantomStation integrates independent upstream projects; it is not a claim of authorship over their engines. Their licenses and attribution requirements apply independently. In particular, check the non-commercial terms of the integrated PS1/NES/SNES components and the licenses of bundled dependencies before redistribution. OpenBIOS-derived material retains its included MIT notice. Logos and trademarks belong to their respective owners.
 
-The license for original PhantomStation code has **not yet been selected**. This private snapshot should not be treated as a public release or a grant of a new license.
+The license for original PhantomStation code has **not yet been selected**. Public access to this repository does not itself grant a new license to reuse that code.
 
 ## Project status
 

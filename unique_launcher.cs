@@ -16,6 +16,12 @@ using System.Windows.Forms;
 // The appended ZIP contains the game files. The per-package cache retains
 // runtime settings; default saves are stored in the user's Documents folder.
 class UniqueLauncher : Form {
+    public static string PackagePath {
+        get {
+            string external = Environment.GetEnvironmentVariable("PHANTOM_PACKAGE_PATH");
+            return String.IsNullOrWhiteSpace(external) ? Application.ExecutablePath : Path.GetFullPath(external);
+        }
+    }
     readonly Image art = Image.FromStream(Assembly.GetExecutingAssembly().GetManifestResourceStream("art"));
     readonly Image logo = Image.FromStream(Assembly.GetExecutingAssembly().GetManifestResourceStream("logo"));
     readonly SoundPlayer sound = new SoundPlayer(Assembly.GetExecutingAssembly().GetManifestResourceStream("sound"));
@@ -211,13 +217,13 @@ class UniqueLauncher : Form {
         return destination;
     }
     public static string Prepare() {
-        using (var archive = ZipFile.OpenRead(Application.ExecutablePath)) {
+        using (var archive = ZipFile.OpenRead(PackagePath)) {
             var manifest = archive.GetEntry("phantom-package.txt");
             if (manifest == null) throw new Exception("Archive du jeu absente.");
             string[] lines; using (var r = new StreamReader(manifest.Open(), Encoding.UTF8)) lines = r.ReadToEnd().Split('\n');
             if (lines.Length < 2) throw new Exception("Archive incomplète.");
             var id = lines[0].Trim(); var exe = lines[1].Trim();
-            PreparedGameTitle = Path.GetFileNameWithoutExtension(Application.ExecutablePath);
+            PreparedGameTitle = Path.GetFileNameWithoutExtension(PackagePath);
             if (lines.Length > 3 && lines[3].Trim().Length > 0) {
                 try { PreparedGameTitle = Encoding.UTF8.GetString(Convert.FromBase64String(lines[3].Trim())); }
                 catch (FormatException) { throw new Exception("Nom du jeu invalide dans l'archive."); }
@@ -380,8 +386,7 @@ class PreparingForm : Form {
         if (finished || task == null || !task.IsCompleted) return;
         finished = true; timer.Stop();
         if (task.IsFaulted) {
-            MessageBox.Show("Impossible de préparer le jeu :\n" + task.Exception.GetBaseException().Message,
-                "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error); Close(); return;
+            PhantomLaunchReport.Show(this, task.Exception.GetBaseException(), UniqueLauncher.PackagePath); Close(); return;
         }
         try {
             string game = task.Result;
@@ -405,7 +410,82 @@ class PreparingForm : Form {
                 foregroundThread.IsBackground = false;
                 foregroundThread.Start();
             }
-        } catch (Exception ex) { MessageBox.Show(ex.Message, "Impossible de lancer le jeu", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        } catch (Exception ex) { PhantomLaunchReport.Show(this, ex, UniqueLauncher.PackagePath); }
         Close();
+    }
+}
+
+// A game can be started without the compiler, so failures must also be saved here.
+static class PhantomLaunchReport {
+    public static string Save(string folder, string report) {
+        Directory.CreateDirectory(folder);
+        string path = Path.Combine(folder, "rapport-lancement-" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".txt");
+        File.WriteAllText(path, report, new UTF8Encoding(false));
+        return path;
+    }
+    static string Json(string text) {
+        var b = new StringBuilder("\"");
+        foreach (char c in text) {
+            if (c == '"' || c == '\\') b.Append('\\').Append(c);
+            else if (c < 32) b.AppendFormat("\\u{0:x4}", (int)c);
+            else b.Append(c);
+        }
+        return b.Append('"').ToString();
+    }
+    static void Send(string title, string content) {
+        if (content.Length > 1900) content = content.Substring(0, 1850) + "\n[Rapport complet enregistré sur le PC]";
+        string subject = "Rapport de lancement - " + title;
+        if (subject.Length > 110) subject = subject.Substring(0, 110);
+        string body = "{\"name\":\"PhantomStation\",\"email\":\"noreply@phantomstation.invalid\",\"subject\":" + Json(subject) +
+                      ",\"message\":" + Json(content) + ",\"website\":\"\"}";
+        var request = (System.Net.HttpWebRequest)System.Net.WebRequest.Create("https://gears.novalysdev.fr/api/public/contact");
+        request.Method = "POST"; request.ContentType = "application/json; charset=utf-8";
+        request.Accept = "application/json"; request.UserAgent = "PhantomStation/1.0";
+        request.AllowAutoRedirect = false; request.Timeout = 15000; request.ReadWriteTimeout = 15000;
+        byte[] data = Encoding.UTF8.GetBytes(body); request.ContentLength = data.Length;
+        using (var stream = request.GetRequestStream()) stream.Write(data, 0, data.Length);
+        using (var response = (System.Net.HttpWebResponse)request.GetResponse()) {
+            if ((int)response.StatusCode != 200) throw new IOException("Le service n’a pas confirmé la réception.");
+            using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
+                char[] buffer = new char[8193]; int length = reader.ReadBlock(buffer, 0, buffer.Length);
+                if (length > 8192) throw new IOException("Réponse du service invalide.");
+                string reply = System.Text.RegularExpressions.Regex.Unescape(new string(buffer, 0, length));
+                if (!System.Text.RegularExpressions.Regex.IsMatch(reply, "\\\"message\\\"\\s*:\\s*\\\"Message envoy(?:é|e)\\.\\\""))
+                    throw new IOException("Le service n’a pas confirmé la réception.");
+            }
+        }
+    }
+    public static void Show(IWin32Window owner, Exception error, string executable) {
+        string title = String.IsNullOrWhiteSpace(UniqueLauncher.PreparedGameTitle) ? Path.GetFileNameWithoutExtension(executable) : UniqueLauncher.PreparedGameTitle;
+        string report = "Rapport de lancement PhantomStation\r\nDate : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss zzz") +
+                        "\r\nJeu : " + title + "\r\nFichier : " + executable + "\r\nSystème : " + Environment.OSVersion +
+                        "\r\nWindows 64 bits : " + Environment.Is64BitOperatingSystem + "\r\n\r\n--- Erreur de lancement ---\r\n" + error;
+        string path = null;
+        try {
+            string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PhantomStation", "Rapports");
+            path = Save(folder, report);
+        } catch (Exception) { path = null; }
+        using (var dialog = new Form { Text = "Erreur de lancement — PhantomStation", Width = 760, Height = 500,
+                                      StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false }) {
+            var caption = new Label { Dock = DockStyle.Top, Height = 58, Padding = new Padding(12, 8, 12, 0),
+                Text = "Impossible de lancer le jeu. " + (path == null ? "Le rapport n’a pas pu être enregistré." : "Rapport enregistré : " + path) };
+            var preview = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both,
+                                        Dock = DockStyle.Fill, Text = report, WordWrap = false };
+            var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
+            var close = new Button { Text = "Fermer", AutoSize = true, DialogResult = DialogResult.Cancel };
+            var send = new Button { Text = "Envoyer le rapport", AutoSize = true };
+            var open = new Button { Text = "Ouvrir le dossier", AutoSize = true, Enabled = path != null };
+            var copy = new Button { Text = "Copier", AutoSize = true };
+            bar.Controls.Add(close); bar.Controls.Add(send); bar.Controls.Add(open); bar.Controls.Add(copy);
+            dialog.Controls.Add(preview); dialog.Controls.Add(caption); dialog.Controls.Add(bar); dialog.CancelButton = close;
+            copy.Click += (s, e) => { try { Clipboard.SetText(report); } catch (Exception) {} };
+            open.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + Path.GetDirectoryName(path) + "\""); } catch (Exception) {} };
+            send.Click += async (s, e) => {
+                send.Enabled = false; send.Text = "Envoi…";
+                try { await Task.Run(() => Send(title, report)); send.Text = "Rapport transmis"; }
+                catch (Exception ex) { send.Enabled = true; send.Text = "Envoyer le rapport"; MessageBox.Show(dialog, "Envoi impossible : " + ex.Message, "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            };
+            dialog.ShowDialog(owner);
+        }
     }
 }

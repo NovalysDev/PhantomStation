@@ -188,7 +188,7 @@ class NintendoGameForm : Form {
             if (!n64 && sender == settingsButton) start.EnvironmentVariables["PHANTOM_OPEN_MENU"] = "settings";
             await session.Run(start, sender == play);
         } catch (Exception ex) {
-            MessageBox.Show("Impossible de lancer le jeu :\n" + ex.Message, "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            PhantomLaunchReport.Show(this, ex, game);
         } finally { play.Enabled = true; if (controllersButton != null) controllersButton.Enabled = true; if (settingsButton != null) settingsButton.Enabled = true; if (codesButton != null) codesButton.Enabled = true; }
     }
 
@@ -229,7 +229,7 @@ class NintendoCodesPanel : Panel {
         string[] saved = new string[0];
         if (File.Exists(path)) saved = File.ReadAllLines(path);
         else {
-            using (var archive = ZipFile.OpenRead(Application.ExecutablePath)) {
+            using (var archive = ZipFile.OpenRead(UniqueLauncher.PackagePath)) {
                 var entry = archive.GetEntry("codes-n64-defaut.tsv");
                 if (entry != null) using (var reader = new StreamReader(entry.Open(), Encoding.UTF8)) {
                     var lines = new List<string>(); string line;

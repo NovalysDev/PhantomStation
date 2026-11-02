@@ -5,6 +5,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import traceback
+import platform
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +26,15 @@ def report_text(game, discs, journal, when=None):
     header.extend(f'  CD {i} : {path}' for i, path in enumerate(discs, 1))
     clean = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', journal).replace('\x00', '')
     return '\n'.join(header) + '\n\n--- Journal de compilation ---\n' + (clean or 'Aucun détail disponible.') + '\n'
+
+
+def launch_report_text(game, executable, error, when=None):
+    when = when or datetime.now().astimezone()
+    details = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
+    return ('Rapport de lancement PhantomStation\nDate : ' + when.strftime('%d/%m/%Y %H:%M:%S %z')
+            + '\nJeu : ' + (str(game).strip() or 'Non renseigné')
+            + '\nFichier : ' + str(executable) + '\nSystème : ' + platform.platform()
+            + '\n\n--- Erreur de lancement ---\n' + details.replace('\x00', '') + '\n')
 
 
 def save_report(text, folder=None):
@@ -46,17 +57,17 @@ def save_report(text, folder=None):
     raise OSError('Impossible de créer un nom de rapport unique.')
 
 
-def submission_payload(game, text):
+def submission_payload(game, text, kind='compilation'):
     """Keep the failure and recent log within the relay's 2000-character limit."""
     limit = 1900
     shortened = len(text) > limit
     if shortened:
-        header = text.split('\n\n--- Journal de compilation ---', 1)[0][:450]
+        header = re.split(r'\n\n--- (?:Journal de compilation|Erreur de lancement) ---', text, maxsplit=1)[0][:450]
         marker = '\n\n[Journal abrégé : le rapport complet reste sur le PC]\n'
         text = header + marker + text[-(limit-len(header)-len(marker)):]
     subject = re.sub(r'[\r\n\x00-\x1f]+', ' ', game).strip()[:85]
     payload = {'name': 'PhantomStation', 'email': 'noreply@phantomstation.invalid',
-               'subject': 'Rapport de compilation' + (' - ' + subject if subject else ''),
+               'subject': ('Rapport de lancement' if kind == 'launch' else 'Rapport de compilation') + (' - ' + subject if subject else ''),
                'message': text, 'website': ''}
     if not 5 <= len(text) <= 2000:
         raise ValueError('Le rapport ne peut pas être préparé.')

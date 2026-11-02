@@ -102,6 +102,8 @@ def main():
         subprocess.run([str(git), '-c', 'protocol.file.allow=always', 'clone', '--quiet',
                         '--depth', '1', original.resolve().as_uri(), str(checkout)], check=True)
         subprocess.run([str(git), '-C', str(checkout), 'remote', 'remove', 'origin'], check=True)
+        # The local clone reflog records the preparation PC's path and user.
+        (checkout / '.git/logs/HEAD').unlink(missing_ok=True)
     shutil.copy2(STAGE / 'nintendo-recomp/.deps/nesrecomp-phantom/common/nes_cart.h',
                  dest_deps / 'nesrecomp-phantom/common/nes_cart.h')
 

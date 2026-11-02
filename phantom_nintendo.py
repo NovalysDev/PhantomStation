@@ -16,12 +16,14 @@ import uuid
 import wave
 import zipfile
 from pathlib import Path
+from phantom_portable import configure_portable_tools
 
 from PIL import Image
 from emballer import _decode_cover
 from phantom_n64_rom import N64_EXTENSIONS, read_n64_rom
 
 BASE = Path(__file__).resolve().parent
+configure_portable_tools(BASE)
 ENGINE = BASE / 'nintendo-recomp'
 TOOLBIN = BASE / 'toolchain' / 'bin'
 CSC = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'

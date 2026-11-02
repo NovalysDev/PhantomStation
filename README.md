@@ -6,6 +6,8 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 > **Development snapshot:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The present repository is a private source snapshot for further development; it is not a ready-to-install release.
 
+An integrated Windows distribution is being prepared so players do not have to install Python, Git, the compilers or the console engines themselves. Local prototypes have been tested, but no complete installable release has been published yet.
+
 ## What it does
 
 - Select a console, provide a game image, choose a title and output folder, and start the build.
@@ -27,9 +29,9 @@ The interface is currently **French**. Features and settings are not yet identic
 | PlayStation 2 | `.iso` | PS2 native recompilation/runtime integration | Experimental. Games may fail to build, boot or progress. |
 | NES | `.nes` | RetroRecomp / NESRecomp integration | Experimental in PhantomStation; mapper, region and game support vary. |
 | Super Nintendo | `.sfc`, `.smc` | RetroRecomp / SNESRecomp integration | Experimental in PhantomStation; special chips and games require individual testing. |
-| Nintendo 64 | `.z64`, `.n64`, `.v64` | Native Console hybrid recompilation and interpretation; a separate GoldenEye Europe native-port path | Experimental. A successful build or boot is not evidence of full playability. |
+| Nintendo 64 | `.z64`, `.n64`, `.v64` | Native Console hybrid recompilation and interpretation; a separate GoldenEye 007 (Nintendo 64, Europe/PAL) native-port path | Experimental. A successful build or boot is not evidence of full playability. |
 
-Archives such as `.7z` must be extracted first; CHD is not currently supported. Selecting a French/PAL image does not translate a game. Compatibility depends on the exact image and revision. GoldenEye Europe uses a dedicated adaptation rather than the generic N64 path.
+Archives such as `.7z` must be extracted first; CHD is not currently supported. Selecting a French/PAL image does not translate a game. Compatibility depends on the exact image and revision. GoldenEye 007 for Nintendo 64, European/PAL version, uses a dedicated adaptation rather than the generic N64 path.
 
 ### Controllers and settings
 

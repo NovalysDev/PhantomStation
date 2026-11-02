@@ -13,6 +13,7 @@ import wave
 import tomllib
 import tkinter as tk
 from pathlib import Path
+from phantom_portable import configure_portable_tools, local_ps1_dependencies, stage_ps1_archives
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 from phantom_intro import PhantomIntro
@@ -48,6 +49,7 @@ from sbi_support import catalogue as sbi_catalogue, identify_disc, resolve_sbi
 from installer_theme import install_game_theme
 
 BASE = Path(__file__).resolve().parent
+configure_portable_tools(BASE)
 FRAMEWORK = BASE / 'psxrecomp'
 TOOLCHAIN = BASE / 'toolchain'
 PROJECTS = BASE / 'projets'
@@ -1361,10 +1363,16 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                 if data is None and serial in index:
                     missing_sbi.append(serial + ' — ' + Path(cue).name)
                 sbi_payloads.append(data)
-            cmd = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(SETUP), '-Disc', str(cues[0]), '-Dir', str(PROJECTS), '-Name', name, '-GithubRepo', slug, '-Players', players, '-Region', 'Non définie', '-Yes', '-EnableRecompUi', '-NoNetplay', '-NoFetchBoxart', '-NoGithub', '-Generate', '-NoBuild', '-PsxrecompUrl', 'https://github.com/RetroPortingToolKit/psxrecomp.git']
+            bundled = local_ps1_dependencies(BASE, env)
+            psx_url = bundled['psxrecomp'].resolve().as_uri() if bundled else 'https://github.com/RetroPortingToolKit/psxrecomp.git'
+            cmd = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(SETUP), '-Disc', str(cues[0]), '-Dir', str(PROJECTS), '-Name', name, '-GithubRepo', slug, '-Players', players, '-Region', 'Non définie', '-Yes', '-EnableRecompUi', '-NoNetplay', '-NoFetchBoxart', '-NoGithub', '-Generate', '-NoBuild', '-PsxrecompUrl', psx_url]
+            if bundled:
+                cmd += ['-RecompUiUrl', bundled['recomp-ui'].resolve().as_uri()]
             out = self.run_step(cmd, env, BASE, 'Création et génération')
             if 'Generate failed' in out or 'generate OK' not in out:
                 raise RuntimeError('La génération n’a pas confirmé sa réussite. Consulte le journal.')
+            if bundled:
+                stage_ps1_archives(BASE, self.project)
             if len(cues) > 1:
                 cmd = [str(PYTHON), str(self.project / 'psxrecomp' / 'tools' / 'new_project_layout' / 'update_disc_set.py'), '--game-toml', str(self.project / 'game.toml')] + [str(p) for p in cues]
                 self.run_step(cmd, env, self.project, 'Enregistrement des disques')

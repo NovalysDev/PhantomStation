@@ -16,11 +16,20 @@ internal static class PhantomCompiler {
         string portable = Path.Combine(directory, @"runtime-python\pythonw.exe");
         string bundled = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             @".cache\codex-runtimes\codex-primary-runtime\dependencies\python\pythonw.exe");
-        string python = File.Exists(portable) ? portable : (File.Exists(bundled) ? bundled : "pythonw.exe");
+        bool hasPortablePython = File.Exists(portable);
+        string python = hasPortablePython ? portable : (File.Exists(bundled) ? bundled : "pythonw.exe");
         try {
-            Process.Start(new ProcessStartInfo(python, "\"" + script + "\"") {
+            var start = new ProcessStartInfo(python, "\"" + script + "\"") {
                 WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true
-            });
+            };
+            if (hasPortablePython) {
+                start.EnvironmentVariables.Remove("PYTHONHOME");
+                start.EnvironmentVariables.Remove("PYTHONPATH");
+                start.EnvironmentVariables.Remove("PYTHONUSERBASE");
+                start.EnvironmentVariables.Remove("VIRTUAL_ENV");
+                start.EnvironmentVariables["PYTHONNOUSERSITE"] = "1";
+            }
+            Process.Start(start);
         } catch (Exception ex) {
             MessageBox.Show("Impossible d'ouvrir PhantomStation. Python avec Tkinter et Pillow est nécessaire.\n\n" + ex.Message,
                             "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error);

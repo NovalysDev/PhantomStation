@@ -10,6 +10,8 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 **To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [private test draft](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
 
+**Already downloaded the test package?** The small `Correctif-PhantomStation-icone-N64-1.0.2.zip` updates the taskbar icon and fixes N64 compilation when the installation folder has parentheses, spaces or accented characters. Close PhantomStation, extract the patch contents directly into the existing PhantomStation folder, and confirm replacement of its program files. Your games, saves and settings are not included in the patch.
+
 **For developers only:** `PhantomStation-sources-sans-dependances.zip` contains a smaller source snapshot. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot run by itself. Its source, upstream version pins and local patches are also available in this repository.
 
 The portable package has been tested locally, not yet on a clean independent PC. Both archives are experimental; no public stable release has been published. Game images and user saves are not included. Before any public distribution, third-party components and media, including the GoldenEye port, still require a review of their redistribution terms.

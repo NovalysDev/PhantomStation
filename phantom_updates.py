@@ -1,5 +1,5 @@
 """Mises à jour signées ; les données personnelles sont exclues."""
-import base64, hashlib, hmac, io, json, os, re, shutil, stat, tempfile, urllib.request, zipfile
+import base64, ctypes, hashlib, hmac, io, json, os, re, shutil, stat, subprocess, sys, tempfile, urllib.request, zipfile
 from pathlib import Path, PurePosixPath
 
 BASE = Path(__file__).resolve().parent
@@ -135,3 +135,88 @@ def install_update(manifest, data, base=BASE):
     finally:
         if not preserve_backup:
             shutil.rmtree(temp, ignore_errors=True)
+
+
+def _remove_deferred_files(folder):
+    """Remove only the files created for this deferred update."""
+    folder = Path(folder)
+    for name in ('manifest.json', 'archive.zip'):
+        try:
+            (folder / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        folder.rmdir()
+    except OSError:
+        pass
+
+
+def _wait_for_parent(pid, timeout_ms=120000):
+    """Wait until the running launcher releases its executable on Windows."""
+    if os.name != 'nt':
+        raise UpdateError('Le redémarrage différé nécessite Windows.')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # The parent has already exited.
+            return
+        raise ctypes.WinError(error)
+    try:
+        result = kernel.WaitForSingleObject(handle, timeout_ms)
+        if result != 0:  # WAIT_OBJECT_0
+            raise UpdateError('La fermeture du compilateur a pris trop de temps.')
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def apply_deferred_update(base, folder, parent_pid):
+    """Apply a verified download after the launcher exits, then reopen it."""
+    base, folder = Path(base).resolve(), Path(folder).resolve()
+    try:
+        _wait_for_parent(int(parent_pid))
+        manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
+        data = (folder / 'archive.zip').read_bytes()
+        install_update(manifest, data, base)
+        subprocess.Popen([str(base / 'PhantomStation.exe')], cwd=str(base), close_fds=True)
+    finally:
+        _remove_deferred_files(folder)
+
+
+def defer_update(manifest, data, base=BASE, parent_pid=None, python=None):
+    """Prepare an update and start a helper which waits for this process."""
+    base = Path(base).resolve()
+    if len(data) != manifest['taille'] or not hmac.compare_digest(hashlib.sha256(data).hexdigest(), manifest['sha256']):
+        raise UpdateError('Empreinte incorrecte.')
+    folder = Path(tempfile.mkdtemp(prefix='phantom-update-'))
+    try:
+        (folder / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        (folder / 'archive.zip').write_bytes(data)
+        code = (
+            "import ctypes,sys;from pathlib import Path;"
+            "sys.path.insert(0,sys.argv[1]);import phantom_updates as u;"
+            "u.run_deferred_update(sys.argv[1],sys.argv[2],int(sys.argv[3]))"
+        )
+        return subprocess.Popen([str(python or sys.executable), '-c', code, str(base), str(folder),
+                                 str(parent_pid if parent_pid is not None else os.getpid())],
+                                cwd=str(base), close_fds=True,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        _remove_deferred_files(folder)
+        raise
+
+
+def run_deferred_update(base, folder, parent_pid):
+    try:
+        apply_deferred_update(base, folder, parent_pid)
+    except Exception as exc:
+        message = 'La mise à jour n’a pas pu être installée. Rouvre PhantomStation.\n\n' + str(exc)
+        if os.name == 'nt':
+            ctypes.windll.user32.MessageBoxW(None, message, 'PhantomStation — mise à jour', 0x10)
+        else:
+            raise

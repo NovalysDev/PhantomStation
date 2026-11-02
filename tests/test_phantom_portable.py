@@ -6,10 +6,24 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from phantom_portable import configure_portable_tools, local_ps1_dependencies, stage_ps1_archives
+from phantom_portable import configure_portable_tools, local_ps1_dependencies, safe_build_path, stage_ps1_archives
 
 
 class PortableToolsTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Temporary DOS drive aliases are Windows-specific')
+    def test_temporary_path_with_parentheses_is_safe_and_removed_after_error(self):
+        with tempfile.TemporaryDirectory(prefix='phantom test (1) ') as temporary:
+            folder = Path(temporary)
+            (folder / 'sentinel.txt').write_text('unchanged', encoding='utf-8')
+            alias = None
+            with self.assertRaisesRegex(RuntimeError, 'test failure'):
+                with safe_build_path(folder) as alias:
+                    self.assertEqual((alias / 'sentinel.txt').read_text(encoding='utf-8'), 'unchanged')
+                    self.assertNotEqual(alias.drive.casefold(), folder.drive.casefold())
+                    raise RuntimeError('test failure')
+            self.assertFalse(alias.exists())
+            self.assertEqual((folder / 'sentinel.txt').read_text(encoding='utf-8'), 'unchanged')
+
     def test_missing_repositories_leave_environment_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             environment = {'PATH': 'unchanged'}

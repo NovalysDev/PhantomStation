@@ -16,7 +16,7 @@ import uuid
 import wave
 import zipfile
 from pathlib import Path
-from phantom_portable import configure_portable_tools
+from phantom_portable import configure_portable_tools, safe_build_path
 
 from PIL import Image
 from emballer import _decode_cover
@@ -250,20 +250,49 @@ def build(platform, rom, name, output, icon=None, background=None, log=print, pl
 
 def build_generic_n64(rom, cartridge, name, output, icon=None, background=None, log=print, package_id=None, players=4):
     """Generate a hybrid native/interpreted N64 executable; compatibility is experimental."""
+    with safe_build_path(BASE) as build_root, safe_build_path(Path(tempfile.gettempdir())) as temp_root:
+        return _build_generic_n64(rom, cartridge, name, output, icon, background, log,
+                                  package_id, players, build_root, temp_root)
+
+
+def _fix_ninja_cmake_path(build_dir, toolbin):
+    """Keep CMake's own Ninja commands on the temporary shell-safe path."""
+    safe_cmake = toolbin / 'cmake.exe'
+    actual_cmake = safe_cmake.resolve(strict=True)
+    if actual_cmake == safe_cmake:
+        return
+    substitutions = 0
+    for ninja in (build_dir / 'build.ninja', build_dir / 'CMakeFiles' / 'rules.ninja'):
+        text = ninja.read_text(encoding='utf-8')
+        updated = text
+        for original in {str(actual_cmake), actual_cmake.as_posix()}:
+            updated, count = re.subn(re.escape(original), lambda match: str(safe_cmake),
+                                     updated, flags=re.IGNORECASE)
+            substitutions += count
+        if updated != text:
+            ninja.write_text(updated, encoding='utf-8', newline='\n')
+    if substitutions == 0:
+        raise RuntimeError('Impossible de préparer le chemin CMake temporaire pour la compilation N64.')
+
+
+def _build_generic_n64(rom, cartridge, name, output, icon, background, log, package_id, players, build_root, temp_root):
     if players not in (1, 2, 3, 4):
         raise ValueError('Choisis entre 1 et 4 joueurs pour la N64.')
-    compiler = N64_COMMON / 'n64recomp.exe'
-    sdl = N64_COMMON / 'SDL2'
-    runtime_sources = N64_SOURCE / 'runtimes' / 'runtime-n64'
+    toolbin = build_root / 'toolchain' / 'bin'
+    n64_source = build_root / 'n64-recomp-lab' / 'moteur-n64-commun'
+    n64_common = build_root / 'n64-engine' / 'generique'
+    compiler = n64_common / 'n64recomp.exe'
+    sdl = n64_common / 'SDL2'
+    runtime_sources = n64_source / 'runtimes' / 'runtime-n64'
     required = [compiler, sdl / 'bin/SDL2.dll', sdl / 'LICENSE.txt', sdl / 'lib/cmake/SDL2/sdl2-config.cmake',
-                runtime_sources / 'src/n64_recomp.c', N64_SOURCE / 'LICENSE',
-                N64_SOURCE / 'runtimes/runtime-gb/vendor/imgui/LICENSE.txt']
-    required += [TOOLBIN / item for item in ('cmake.exe', 'ninja.exe', 'clang.exe', 'clang++.exe', 'llvm-windres.exe')]
+                runtime_sources / 'src/n64_recomp.c', n64_source / 'LICENSE',
+                n64_source / 'runtimes/runtime-gb/vendor/imgui/LICENSE.txt']
+    required += [toolbin / item for item in ('cmake.exe', 'ninja.exe', 'clang.exe', 'clang++.exe', 'llvm-windres.exe')]
     if not all(path.is_file() for path in required):
         raise RuntimeError('Le moteur N64 commun ou ses outils sont incomplets ; réinstalle PhantomStation.')
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     environment = os.environ.copy()
-    environment['PATH'] = str(TOOLBIN) + os.pathsep + environment.get('PATH', '')
+    environment['PATH'] = str(toolbin) + os.pathsep + environment.get('PATH', '')
 
     def run(command, label, cwd=None, timeout=1200):
         try:
@@ -308,7 +337,7 @@ def build_generic_n64(rom, cartridge, name, output, icon=None, background=None, 
         if code:
             raise RuntimeError('Compilation N64 impossible :\n' + ''.join(errors[-20:]) + '\n' + ''.join(lines)[-3000:])
 
-    with tempfile.TemporaryDirectory(prefix='phantom-n64-') as folder:
+    with tempfile.TemporaryDirectory(prefix='phantom-n64-', dir=str(temp_root)) as folder:
         work = Path(folder)
         normalized = work / 'cartouche.z64'
         normalized.write_bytes(cartridge.data)
@@ -319,16 +348,18 @@ def build_generic_n64(rom, cartridge, name, output, icon=None, background=None, 
              '--profile', work / 'observation.trace', '--profile-frames', '600'], 'Analyse N64 impossible', timeout=600)
         log('Compilation du programme N64 et de son interface…')
         build_dir = work / 'build'
-        run([TOOLBIN / 'cmake.exe', '-S', project, '-B', build_dir, '-G', 'Ninja',
-             '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=' + (TOOLBIN / 'clang.exe').as_posix(),
-             '-DCMAKE_CXX_COMPILER=' + (TOOLBIN / 'clang++.exe').as_posix(),
-             '-DCMAKE_RC_COMPILER=' + (TOOLBIN / 'llvm-windres.exe').as_posix(),
-             '-DCMAKE_MAKE_PROGRAM=' + (TOOLBIN / 'ninja.exe').as_posix(),
+        run([toolbin / 'cmake.exe', '-S', project, '-B', build_dir, '-G', 'Ninja',
+             '-DCMAKE_COMMAND=' + (toolbin / 'cmake.exe').as_posix(),
+             '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=' + (toolbin / 'clang.exe').as_posix(),
+             '-DCMAKE_CXX_COMPILER=' + (toolbin / 'clang++.exe').as_posix(),
+             '-DCMAKE_RC_COMPILER=' + (toolbin / 'llvm-windres.exe').as_posix(),
+             '-DCMAKE_MAKE_PROGRAM=' + (toolbin / 'ninja.exe').as_posix(),
              '-DSDL2_DIR=' + (sdl / 'lib/cmake/SDL2').as_posix(), '-DCMAKE_EXE_LINKER_FLAGS=-static'],
             'Configuration du programme N64 impossible')
         if 'n64_sdl.cpp' not in (build_dir / 'build.ninja').read_text(encoding='utf-8'):
             raise RuntimeError('L’interface vidéo N64 n’a pas pu être configurée.')
-        compile_project([TOOLBIN / 'cmake.exe', '--build', build_dir, '--parallel', '2'])
+        _fix_ninja_cmake_path(build_dir, toolbin)
+        compile_project([toolbin / 'cmake.exe', '--build', build_dir, '--parallel', '2'])
         executable = build_dir / 'jeu_n64.exe'
         if not executable.is_file():
             raise RuntimeError('La compilation N64 n’a pas produit de programme.')
@@ -340,9 +371,9 @@ def build_generic_n64(rom, cartridge, name, output, icon=None, background=None, 
         marker = work / 'n64-generic.flag'
         marker.write_text('native-console-hybride-v1\n' + str(players) + '\n', encoding='utf-8')
         extra = [(marker, 'n64-generic.flag'), (sdl / 'bin/SDL2.dll', 'SDL2.dll'),
-                 (N64_SOURCE / 'LICENSE', 'licences/native-console-LICENSE.txt'),
-                 (N64_SOURCE / 'THIRD_PARTY.md', 'licences/native-console-THIRD-PARTY.md'),
-                 (N64_SOURCE / 'runtimes/runtime-gb/vendor/imgui/LICENSE.txt', 'licences/imgui-LICENSE.txt'),
+                 (n64_source / 'LICENSE', 'licences/native-console-LICENSE.txt'),
+                 (n64_source / 'THIRD_PARTY.md', 'licences/native-console-THIRD-PARTY.md'),
+                 (n64_source / 'runtimes/runtime-gb/vendor/imgui/LICENSE.txt', 'licences/imgui-LICENSE.txt'),
                  (sdl / 'LICENSE.txt', 'licences/SDL2-LICENSE.txt')]
         defaults = n64_default_codes(cartridge, work, log)
         if defaults is not None:

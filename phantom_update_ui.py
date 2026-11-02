@@ -1,7 +1,5 @@
 """Contrôle et installation des mises à jour au lancement."""
 import queue
-import subprocess
-import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -49,9 +47,8 @@ def install_dialog(root, manifest):
     def work():
         try:
             data = updates.download_update(manifest, lambda received: events.put(('progress', received)))
-            events.put(('status', 'Vérification et installation de la mise à jour…'))
-            updates.install_update(manifest, data)
-            events.put(('done', None))
+            events.put(('status', 'Préparation de l’installation et du redémarrage…'))
+            events.put(('done', data))
         except Exception as exc:
             events.put(('error', str(exc) or 'Une erreur inattendue est survenue.'))
     def poll():
@@ -67,10 +64,11 @@ def install_dialog(root, manifest):
             dialog.after(20, poll); return
         if kind == 'done':
             try:
-                subprocess.Popen([sys.executable, str(updates.BASE / 'lanceur.py')], cwd=str(updates.BASE), close_fds=True)
-            except OSError:
-                messagebox.showinfo('Mise à jour installée', 'La mise à jour est installée. Ferme et rouvre PhantomStation.', parent=dialog)
-                dialog.destroy(); return
+                root._phantom_update_process = updates.defer_update(manifest, value)
+            except Exception as exc:
+                messagebox.showerror('Mise à jour impossible', str(exc) + '\n\nTu peux continuer à utiliser PhantomStation.', parent=dialog)
+                dialog.destroy()
+                return
             root.destroy()
         else:
             messagebox.showerror('Mise à jour impossible', value + '\n\nTu peux continuer à utiliser PhantomStation.', parent=dialog)

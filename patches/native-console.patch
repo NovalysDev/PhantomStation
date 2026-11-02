@@ -1,0 +1,552 @@
+diff --git a/runtimes/runtime-n64/platform/n64_input.cpp b/runtimes/runtime-n64/platform/n64_input.cpp
+index acc2f55..0a2e6d3 100644
+--- a/runtimes/runtime-n64/platform/n64_input.cpp
++++ b/runtimes/runtime-n64/platform/n64_input.cpp
+@@ -14,31 +14,31 @@ static const struct {
+     const char *config;
+     uint16_t button;
+ } k_actions[N64_ACTION_COUNT] = {
+-    { "Stick Up", "stick_up", 0 },
+-    { "Stick Down", "stick_down", 0 },
+-    { "Stick Left", "stick_left", 0 },
+-    { "Stick Right", "stick_right", 0 },
++    { "Stick haut", "stick_up", 0 },
++    { "Stick bas", "stick_down", 0 },
++    { "Stick gauche", "stick_left", 0 },
++    { "Stick droite", "stick_right", 0 },
+     { "A", "a", N64_BTN_A },
+     { "B", "b", N64_BTN_B },
+     { "Z", "z", N64_BTN_Z },
+     { "Start", "start", N64_BTN_START },
+     { "L", "l", N64_BTN_L },
+     { "R", "r", N64_BTN_R },
+-    { "D-Pad Up", "dpad_up", N64_BTN_DUP },
+-    { "D-Pad Down", "dpad_down", N64_BTN_DDOWN },
+-    { "D-Pad Left", "dpad_left", N64_BTN_DLEFT },
+-    { "D-Pad Right", "dpad_right", N64_BTN_DRIGHT },
+-    { "C-Up", "c_up", N64_BTN_CUP },
+-    { "C-Down", "c_down", N64_BTN_CDOWN },
+-    { "C-Left", "c_left", N64_BTN_CLEFT },
+-    { "C-Right", "c_right", N64_BTN_CRIGHT },
+-    { "Fast Forward (Hold)", "fast_forward", 0 },
+-    { "Toggle Overlay", "toggle_overlay", 0 },
+-    { "Toggle FPS Counter", "toggle_fps", 0 },
+-    { "Toggle Mute", "toggle_mute", 0 },
+-    { "Toggle Menu", "toggle_menu", 0 },
+-    { "Toggle Fullscreen", "toggle_fullscreen", 0 },
+-    { "Screenshot", "screenshot", 0 },
++    { "Croix haut", "dpad_up", N64_BTN_DUP },
++    { "Croix bas", "dpad_down", N64_BTN_DDOWN },
++    { "Croix gauche", "dpad_left", N64_BTN_DLEFT },
++    { "Croix droite", "dpad_right", N64_BTN_DRIGHT },
++    { "C haut", "c_up", N64_BTN_CUP },
++    { "C bas", "c_down", N64_BTN_CDOWN },
++    { "C gauche", "c_left", N64_BTN_CLEFT },
++    { "C droite", "c_right", N64_BTN_CRIGHT },
++    { "Avance rapide", "fast_forward", 0 },
++    { "Afficher les infos", "toggle_overlay", 0 },
++    { "Afficher les FPS", "toggle_fps", 0 },
++    { "Couper le son", "toggle_mute", 0 },
++    { "Ouvrir le menu", "toggle_menu", 0 },
++    { "Plein ecran", "toggle_fullscreen", 0 },
++    { "Capture d'ecran", "screenshot", 0 },
+ };
+ 
+ const char *n64_action_label(int action) { return k_actions[action].label; }
+diff --git a/runtimes/runtime-n64/platform/n64_sdl.cpp b/runtimes/runtime-n64/platform/n64_sdl.cpp
+index bf50cc6..40d3141 100644
+--- a/runtimes/runtime-n64/platform/n64_sdl.cpp
++++ b/runtimes/runtime-n64/platform/n64_sdl.cpp
+@@ -63,6 +63,8 @@
+ #include "backends/imgui_impl_sdlrenderer2.h"
+ 
+ #include "n64.h"
++#include "n64_bus.h"
++#include "n64_io.h"
+ #include "n64_coverage.h"
+ #include "n64_input.h"
+ #include "n64_recomp.h"
+@@ -229,6 +231,38 @@ struct PadState {
+     int8_t x = 0, y = 0;
+ };
+ 
++struct PhantomCode { uint32_t address; uint16_t value; bool wide; };
++
++static std::vector<PhantomCode> phantom_load_codes(const char *path)
++{
++    std::vector<PhantomCode> codes;
++    FILE *file = path ? fopen(path, "rb") : nullptr;
++    if (!file) return codes;
++    char line[512];
++    while (codes.size() < 512 && fgets(line, sizeof line, file)) {
++        if (line[0] != '1' || line[1] != '\t') continue;
++        const char *code = strrchr(line, '\t');
++        unsigned command, value; char extra;
++        if (!code || sscanf(code + 1, "%8x %4x %c", &command, &value, &extra) != 2) continue;
++        unsigned type = command >> 24, address = command & 0x00ffffffu;
++        if (address >= 0x800000u || (type != 0x80 && type != 0x81) ||
++            (type == 0x80 && value > 255) || (type == 0x81 && (address & 1))) continue;
++        codes.push_back({address, (uint16_t)value, type == 0x81});
++    }
++    fclose(file);
++    return codes;
++}
++
++static void phantom_apply_codes(N64Machine *m, const std::vector<PhantomCode> &codes)
++{
++    for (const PhantomCode &code : codes) {
++        uint32_t size = code.wide ? 2u : 1u;
++        if (code.address >= m->rdram_size || size > m->rdram_size - code.address) continue;
++        if (code.wide) n64_bus_write16(&m->cpu, code.address, code.value);
++        else n64_bus_write8(&m->cpu, code.address, (uint8_t)code.value);
++    }
++}
++
+ /* Frontend state kept between frames. */
+ struct Frontend {
+     N64Machine *m = nullptr;
+@@ -239,6 +273,9 @@ struct Frontend {
+     int large_w = 0, large_h = 0;
+     SDL_Rect viewport = { 0, 0, ASPECT_W, ASPECT_H };
+     SDL_GameController *pad = nullptr;
++    SDL_GameController *extra_pads[3] = {};
++    int max_players = 4;
++    bool scroll_to_controls = false;
+     SDL_AudioDeviceID audio = 0;
+     SDL_AudioSpec have = {};
+     std::string title;
+@@ -388,17 +425,22 @@ static void save_prefs(const Frontend &f)
+ /* Controls                                                            */
+ /* ------------------------------------------------------------------ */
+ 
+-static bool binding_down(const Frontend &f, const N64Binding &b, const Uint8 *kb, uint8_t mods)
++static bool binding_down_for(SDL_GameController *pad, const N64Binding &b, const Uint8 *kb, uint8_t mods)
+ {
+     switch (b.kind) {
+     case N64_BIND_KEY: return kb[b.code] && n64_key_mods_match(b, mods);
+-    case N64_BIND_BUTTON: return f.pad && SDL_GameControllerGetButton(f.pad, (SDL_GameControllerButton)b.code);
+-    case N64_BIND_AXIS_POSITIVE: return f.pad && SDL_GameControllerGetAxis(f.pad, (SDL_GameControllerAxis)b.code) > 16000;
+-    case N64_BIND_AXIS_NEGATIVE: return f.pad && SDL_GameControllerGetAxis(f.pad, (SDL_GameControllerAxis)b.code) < -16000;
++    case N64_BIND_BUTTON: return pad && SDL_GameControllerGetButton(pad, (SDL_GameControllerButton)b.code);
++    case N64_BIND_AXIS_POSITIVE: return pad && SDL_GameControllerGetAxis(pad, (SDL_GameControllerAxis)b.code) > 16000;
++    case N64_BIND_AXIS_NEGATIVE: return pad && SDL_GameControllerGetAxis(pad, (SDL_GameControllerAxis)b.code) < -16000;
+     default: return false;
+     }
+ }
+ 
++static bool binding_down(const Frontend &f, const N64Binding &b, const Uint8 *kb, uint8_t mods)
++{
++    return binding_down_for(f.pad, b, kb, mods);
++}
++
+ static bool action_held(const Frontend &f, int action, const Uint8 *kb, uint8_t mods)
+ {
+     for (int s = 0; s < 2; s++) {
+@@ -410,23 +452,23 @@ static bool action_held(const Frontend &f, int action, const Uint8 *kb, uint8_t
+ 
+ /* How far one binding pushes the stick in its direction: a key or button
+  * all the way, an axis in proportion. */
+-static int stick_push(const Frontend &f, const N64Binding &b, const Uint8 *kb, uint8_t mods)
++static int stick_push_for(SDL_GameController *pad, const N64Binding &b, const Uint8 *kb, uint8_t mods)
+ {
+     if (b.kind == N64_BIND_AXIS_POSITIVE || b.kind == N64_BIND_AXIS_NEGATIVE) {
+-        if (!f.pad) return 0;
+-        const int v = SDL_GameControllerGetAxis(f.pad, (SDL_GameControllerAxis)b.code);
++        if (!pad) return 0;
++        const int v = SDL_GameControllerGetAxis(pad, (SDL_GameControllerAxis)b.code);
+         return n64_stick_from_axis(b.kind == N64_BIND_AXIS_POSITIVE ? v : -v);
+     }
+-    return binding_down(f, b, kb, mods) ? N64_STICK_MAX : 0;
++    return binding_down_for(pad, b, kb, mods) ? N64_STICK_MAX : 0;
+ }
+ 
+ /* The furthest any of a direction's bindings pushes. */
+-static int stick_direction(const Frontend &f, int action, const Uint8 *kb, uint8_t mods)
++static int stick_direction(const Frontend &f, int action, const Uint8 *kb, uint8_t mods, SDL_GameController *pad, bool keyboard)
+ {
+     int most = 0;
+     for (int s = 0; s < 2; s++) {
+-        const int k = stick_push(f, f.map.keyboard[action][s], kb, mods);
+-        const int c = stick_push(f, f.map.controller[action][s], kb, mods);
++        const int k = keyboard ? stick_push_for(pad, f.map.keyboard[action][s], kb, mods) : 0;
++        const int c = stick_push_for(pad, f.map.controller[action][s], kb, mods);
+         if (k > most) most = k;
+         if (c > most) most = c;
+     }
+@@ -434,16 +476,21 @@ static int stick_direction(const Frontend &f, int action, const Uint8 *kb, uint8
+ }
+ 
+ /* The controller as the player is holding it. The N64's Y axis is up. */
+-static PadState gameplay_input(const Frontend &f)
++static PadState gameplay_input(const Frontend &f, int port = 0)
+ {
+     const Uint8 *kb = SDL_GetKeyboardState(NULL);
+     uint8_t mods = n64_mods_from_sdl(SDL_GetModState());
+     PadState p;
++    SDL_GameController *pad = port == 0 ? f.pad : f.extra_pads[port - 1];
+     for (int a = 0; a < N64_ACTION_GAMEPLAY_COUNT; a++) {
+-        if (!n64_action_is_stick(a) && action_held(f, a, kb, mods)) p.buttons |= n64_action_button(a);
++        if (n64_action_is_stick(a)) continue;
++        for (int s = 0; s < 2; s++) {
++            if ((port == 0 && binding_down_for(pad, f.map.keyboard[a][s], kb, mods)) ||
++                binding_down_for(pad, f.map.controller[a][s], kb, mods)) p.buttons |= n64_action_button(a);
++        }
+     }
+-    p.x = (int8_t)(stick_direction(f, N64_ACTION_STICK_RIGHT, kb, mods) - stick_direction(f, N64_ACTION_STICK_LEFT, kb, mods));
+-    p.y = (int8_t)(stick_direction(f, N64_ACTION_STICK_UP, kb, mods) - stick_direction(f, N64_ACTION_STICK_DOWN, kb, mods));
++    p.x = (int8_t)(stick_direction(f, N64_ACTION_STICK_RIGHT, kb, mods, pad, port == 0) - stick_direction(f, N64_ACTION_STICK_LEFT, kb, mods, pad, port == 0));
++    p.y = (int8_t)(stick_direction(f, N64_ACTION_STICK_UP, kb, mods, pad, port == 0) - stick_direction(f, N64_ACTION_STICK_DOWN, kb, mods, pad, port == 0));
+     return p;
+ }
+ 
+@@ -564,6 +611,104 @@ static void set_pad(Frontend &f, SDL_GameController *pad)
+     f.pad_profile = n64_pad_profile(pad, f.platform);
+ }
+ 
++static SDL_GameController *pad_at(const Frontend &f, int port)
++{
++    return port == 0 ? f.pad : f.extra_pads[port - 1];
++}
++
++static void update_controller_ports(Frontend &f)
++{
++    if (!f.m) return;
++    f.m->controllers = 1; /* Keyboard remains available on port 1. */
++    for (int port = 1; port < f.max_players; port++) if (pad_at(f, port)) f.m->controllers |= (uint8_t)(1u << port);
++}
++
++static void add_controller(Frontend &f, int index)
++{
++    if (index < 0 || !SDL_IsGameController(index)) return;
++    SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(index);
++    for (int port = 0; port < 4; port++) {
++        SDL_GameController *pad = pad_at(f, port);
++        if (pad && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)) == id) return;
++    }
++    for (int port = 0; port < f.max_players; port++) {
++        if (pad_at(f, port)) continue;
++        SDL_GameController *pad = SDL_GameControllerOpen(index);
++        if (!pad) return;
++        if (port == 0) set_pad(f, pad);
++        else f.extra_pads[port - 1] = pad;
++        update_controller_ports(f);
++        return;
++    }
++}
++
++static void remove_controller(Frontend &f, SDL_JoystickID id)
++{
++    for (int port = 0; port < 4; port++) {
++        SDL_GameController *pad = pad_at(f, port);
++        if (!pad || SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)) != id) continue;
++        if (port == 0) set_pad(f, nullptr);
++        else { SDL_GameControllerClose(pad); f.extra_pads[port - 1] = nullptr; }
++        if (f.m) n64_set_buttons(f.m, port, 0, 0, 0);
++        update_controller_ports(f);
++        return;
++    }
++}
++
++/* Exercise independent SDL controller ports without requiring physical pads. */
++static bool phantom_controller_selftest()
++{
++    Frontend f;
++    f.m = n64_create();
++    if (!f.m) return false;
++    n64_input_defaults(f.map, f.platform);
++    int devices[4] = { -1, -1, -1, -1 };
++    SDL_Joystick *joy[4] = {};
++    bool ok = true;
++    for (int i = 0; i < 4; i++) {
++        devices[i] = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX,
++                                              SDL_CONTROLLER_BUTTON_MAX, 0);
++        if (devices[i] < 0) { ok = false; break; }
++        add_controller(f, devices[i]);
++        joy[i] = SDL_JoystickOpen(devices[i]);
++        if (!pad_at(f, i) || !joy[i]) { ok = false; break; }
++    }
++    if (ok) {
++        remove_controller(f, SDL_JoystickInstanceID(joy[2]));
++        remove_controller(f, SDL_JoystickInstanceID(joy[3]));
++        f.max_players = 2;
++        add_controller(f, devices[2]); add_controller(f, devices[3]);
++        ok = f.m->controllers == 3 && !pad_at(f, 2) && !pad_at(f, 3);
++        f.max_players = 4;
++        add_controller(f, devices[2]); add_controller(f, devices[3]);
++        ok = ok && f.m->controllers == 15 && pad_at(f, 2) && pad_at(f, 3);
++        SDL_JoystickSetVirtualButton(joy[0], SDL_CONTROLLER_BUTTON_A, 1);
++        SDL_JoystickSetVirtualButton(joy[1], SDL_CONTROLLER_BUTTON_X, 1);
++        SDL_JoystickSetVirtualButton(joy[2], SDL_CONTROLLER_BUTTON_START, 1);
++        SDL_JoystickSetVirtualAxis(joy[3], SDL_CONTROLLER_AXIS_LEFTX, 32767);
++        SDL_JoystickUpdate();
++        PadState p0 = gameplay_input(f, 0), p1 = gameplay_input(f, 1);
++        PadState p2 = gameplay_input(f, 2), p3 = gameplay_input(f, 3);
++        ok = ok && f.m->controllers == 15 && p0.buttons == n64_action_button(N64_ACTION_A) &&
++             p1.buttons == n64_action_button(N64_ACTION_B) && p2.buttons == n64_action_button(N64_ACTION_START) &&
++             p3.buttons == 0 && p3.x == N64_STICK_MAX;
++        SDL_JoystickID id = SDL_JoystickInstanceID(joy[1]);
++        n64_set_buttons(f.m, 1, p1.buttons, p1.x, p1.y);
++        remove_controller(f, id);
++        ok = ok && f.m->controllers == 13 && !pad_at(f, 1) && f.m->buttons[1] == 0 && pad_at(f, 2) && pad_at(f, 3);
++        add_controller(f, devices[1]);
++        ok = ok && f.m->controllers == 15 && pad_at(f, 1) && pad_at(f, 2) && pad_at(f, 3);
++    }
++    for (int i = 0; i < 4; i++) {
++        SDL_GameController *pad = pad_at(f, i);
++        if (pad) SDL_GameControllerClose(pad);
++        if (joy[i]) SDL_JoystickClose(joy[i]);
++    }
++    for (int i = 3; i >= 0; i--) if (devices[i] >= 0) SDL_JoystickDetachVirtual(devices[i]);
++    n64_destroy(f.m);
++    return ok;
++}
++
+ /* Where the game goes on a w x h screen: always the 4:3 shape, whether the
+  * frame is 640 x 480 or a PAL 640 x 576. */
+ static SDL_Rect viewport_for(int scaling, int w, int h)
+@@ -985,32 +1130,38 @@ static void draw_menu(Frontend &f)
+                        f.save_path.c_str());
+ 
+     ImGui::Separator();
+-    ImGui::TextDisabled("Controls");
++    ImGui::TextDisabled("Controls / Manettes");
++    if (f.scroll_to_controls) { ImGui::SetScrollHereY(0.0f); f.scroll_to_controls = false; }
+     static const char *const platform_names[] = { "Windows", "Mac", "Steam Deck" };
+-    ImGui::Text("Default layout: %s", platform_names[f.platform]);
++    ImGui::Text("Configuration : %s", platform_names[f.platform]);
+     if (f.pad) {
+         const char *name = SDL_GameControllerName(f.pad);
+-        ImGui::Text("Detected Controller: %s", name ? name : "(unnamed)");
++        ImGui::Text("Joueur 1 : %s", name ? name : "manette sans nom");
+     } else {
+-        ImGui::TextDisabled("No controller detected.");
++        ImGui::TextDisabled("Joueur 1 : clavier (aucune manette detectee)");
+     }
+-    ImGui::TextWrapped("Choose a binding, then press the new key or button. Escape or Guide cancels. Hold %s with a "
+-                       "key to bind a combination. A controller stick bound to a stick direction moves the N64 stick "
+-                       "in proportion; a key or button pushes it all the way.",
++    for (int port = 1; port < f.max_players; port++) {
++        SDL_GameController *pad = pad_at(f, port);
++        const char *name = pad ? SDL_GameControllerName(pad) : nullptr;
++        ImGui::Text("Joueur %d : %s", port + 1, name ? name : "aucune manette");
++    }
++    ImGui::TextWrapped("Les manettes partagent la configuration ci-dessous.");
++    ImGui::TextWrapped("Clique sur une touche puis appuie sur la nouvelle touche ou sur le bouton de la manette. "
++                       "Echap ou Guide annule. Maintiens %s pour une combinaison de touches.",
+                        f.platform == N64_PLATFORM_MAC ? "Command, Control, Option or Shift" : "Ctrl, Alt or Shift");
+     if (f.capturing) {
+-        ImGui::Text("Waiting for a %s for %s...", f.capture_keyboard ? "key" : "controller button",
++        ImGui::Text("Appuie sur %s pour %s...", f.capture_keyboard ? "une touche" : "un bouton de manette",
+                     n64_action_label(f.capture_action));
+         ImGui::SameLine();
+-        if (ImGui::Button("Cancel")) finish_capture(f, NULL);
++        if (ImGui::Button("Annuler")) finish_capture(f, NULL);
+     }
+     if (!f.bind_note.empty()) ImGui::TextWrapped("%s", f.bind_note.c_str());
+-    draw_binding_table(f, "Keyboard Gameplay", true, 0, N64_ACTION_GAMEPLAY_COUNT);
+-    draw_binding_table(f, "Controller Gameplay", false, 0, N64_ACTION_GAMEPLAY_COUNT);
+-    draw_binding_table(f, "Keyboard Shortcuts", true, N64_ACTION_GAMEPLAY_COUNT, N64_ACTION_COUNT);
+-    draw_binding_table(f, "Controller Shortcuts", false, N64_ACTION_GAMEPLAY_COUNT, N64_ACTION_COUNT);
+-    ImGui::TextDisabled("Escape and the controller's Guide button always open the menu as well.");
+-    if (ImGui::Button("Reset Controls")) {
++    draw_binding_table(f, "Commandes manette", false, 0, N64_ACTION_GAMEPLAY_COUNT);
++    draw_binding_table(f, "Commandes clavier", true, 0, N64_ACTION_GAMEPLAY_COUNT);
++    draw_binding_table(f, "Raccourcis clavier", true, N64_ACTION_GAMEPLAY_COUNT, N64_ACTION_COUNT);
++    draw_binding_table(f, "Raccourcis manette", false, N64_ACTION_GAMEPLAY_COUNT, N64_ACTION_COUNT);
++    ImGui::TextDisabled("Echap et Guide ouvrent aussi le menu.");
++    if (ImGui::Button("Reinitialiser les commandes")) {
+         f.map = f.defaults;
+         f.bind_note = "Controls reset to the " + std::string(platform_names[f.platform]) + " defaults.";
+         f.input_resync = true;
+@@ -1301,16 +1452,25 @@ static bool menu_selftest_step(Frontend &f, MenuSelfTest &t)
+ 
+ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char *default_rom)
+ {
+-    const char *rom_path = NULL, *save_dir = NULL, *shot_prefix = NULL, *prefs_file = NULL, *display_shot = NULL;
+-    int cli_scale = 0, cli_internal_scale = 0, display_w = 3840, display_h = 2160;
++    const char *rom_path = NULL, *save_dir = NULL, *shot_prefix = NULL, *prefs_file = NULL, *display_shot = NULL, *codes_file = NULL;
++    int cli_scale = 0, cli_internal_scale = 0, display_w = 3840, display_h = 2160, max_players = 4;
+     long limit_frames = -1;
+     bool cli_fullscreen = false, cli_muted = false, interpreter_only = false, audio_stats = false;
+-    bool selftest_verify = false, no_learn = false, cli_vi_raw = false;
++    bool selftest_verify = false, no_learn = false, cli_vi_raw = false, open_controls = false, open_settings = false, controller_selftest = false, codes_selftest = false;
+     MenuSelfTest selftest;
+     for (int i = 1; i < argc; i++) {
+         const char *a = argv[i];
+         if (!strcmp(a, "--scale") && i + 1 < argc) cli_scale = atoi(argv[++i]);
++        else if (!strcmp(a, "--max-players") && i + 1 < argc) {
++            const char *value = argv[++i];
++            if (strlen(value) != 1 || value[0] < '1' || value[0] > '4') {
++                fprintf(stderr, "--max-players requires 1 to 4\n");
++                return 2;
++            }
++            max_players = value[0] - '0';
++        }
+         else if (!strcmp(a, "--prefs") && i + 1 < argc) prefs_file = argv[++i];
++        else if (!strcmp(a, "--codes") && i + 1 < argc) codes_file = argv[++i];
+         else if (!strcmp(a, "--display-shot") && i + 1 < argc) display_shot = argv[++i];
+         else if (!strcmp(a, "--display-size") && i + 1 < argc) {
+             if (sscanf(argv[++i], "%dx%d", &display_w, &display_h) != 2 || display_w < 1 || display_h < 1) {
+@@ -1319,6 +1479,10 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+             }
+         }
+         else if (!strcmp(a, "--menu-selftest")) selftest.enabled = true;
++        else if (!strcmp(a, "--open-controls")) open_controls = true;
++        else if (!strcmp(a, "--open-settings")) open_settings = true;
++        else if (!strcmp(a, "--phantom-controller-selftest")) controller_selftest = true;
++        else if (!strcmp(a, "--phantom-codes-selftest")) codes_selftest = true;
+         else if (!strcmp(a, "--menu-selftest-verify")) selftest_verify = true;
+         else if (!strcmp(a, "--save-dir") && i + 1 < argc) save_dir = argv[++i];
+         else if (!strcmp(a, "--fullscreen")) cli_fullscreen = true;
+@@ -1348,6 +1512,24 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+         return 1;
+     }
++    if (controller_selftest) {
++        bool ok = phantom_controller_selftest();
++        fprintf(stderr, "PhantomStation controller selftest: %s\n", ok ? "PASS" : "FAIL");
++        quit_sdl();
++        return ok ? 0 : 1;
++    }
++    if (codes_selftest) {
++        N64Machine *test = n64_create();
++        if (!test) { quit_sdl(); return 1; }
++        n64_rdram_configure(test);
++        std::vector<PhantomCode> codes = phantom_load_codes(codes_file);
++        phantom_apply_codes(test, codes);
++        bool ok = codes.size() == 2 && test->rdram[0x100] == 0x7f &&
++                  test->rdram[0x102] == 0x12 && test->rdram[0x103] == 0x34 &&
++                  test->rdram[0x105] == 0 && test->rdram[0x106] == 0;
++        fprintf(stderr, "PhantomStation codes selftest: %s\n", ok ? "PASS" : "FAIL");
++        n64_destroy(test); quit_sdl(); return ok ? 0 : 1;
++    }
+ 
+     /* A ROM given on the command line wins; then the ROM compiled into the
+      * program; then a default file next to the executable. */
+@@ -1394,6 +1576,9 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+ 
+     Frontend f;
+     f.m = m;
++    f.max_players = max_players;
++    f.show_menu = open_controls || open_settings;
++    f.scroll_to_controls = open_controls;
+     char save_path[1100], shot_path[1100], trace_path[1100];
+     if (save_dir) make_dir(save_dir); /* fails harmlessly if it exists */
+     sibling_path(save_path, sizeof save_path, save_dir, rom_path, ".sav");
+@@ -1417,6 +1602,7 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+     const bool learn = m->rc_program && !no_learn && !selftest.enabled;
+     if (learn) n64_coverage_enable_light(m);
+     f.frame_seconds = m->cart.pal ? FRAME_SECONDS_PAL : FRAME_SECONDS_NTSC;
++    const std::vector<PhantomCode> phantom_codes = phantom_load_codes(codes_file);
+ 
+     if (prefs_file) {
+         f.prefs_path = prefs_file;
+@@ -1503,9 +1689,8 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+         f.audio = 0;
+     }
+ 
+-    for (int i = 0; i < SDL_NumJoysticks() && !f.pad; i++) {
+-        if (SDL_IsGameController(i)) set_pad(f, SDL_GameControllerOpen(i));
+-    }
++    for (int i = 0; i < SDL_NumJoysticks(); i++) add_controller(f, i);
++    update_controller_ports(f);
+     f.pad_profile = n64_pad_profile(f.pad, f.platform);
+ 
+     const double freq = (double)SDL_GetPerformanceFrequency();
+@@ -1528,10 +1713,9 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+             if (!(f.capturing && (ev.type == SDL_KEYDOWN || ev.type == SDL_TEXTINPUT))) ImGui_ImplSDL2_ProcessEvent(&ev);
+             if (handle_capture(f, ev)) continue;
+             if (ev.type == SDL_QUIT) running = false;
+-            else if (ev.type == SDL_CONTROLLERDEVICEADDED && !f.pad) set_pad(f, SDL_GameControllerOpen(ev.cdevice.which));
+-            else if (ev.type == SDL_CONTROLLERDEVICEREMOVED && f.pad &&
+-                     ev.cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(f.pad))) {
+-                set_pad(f, NULL);
++            else if (ev.type == SDL_CONTROLLERDEVICEADDED) add_controller(f, ev.cdevice.which);
++            else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
++                remove_controller(f, ev.cdevice.which);
+             } else if (ev.type == SDL_CONTROLLERBUTTONDOWN && ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
+                 set_menu(f, !f.show_menu);
+             } else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+@@ -1581,10 +1765,15 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+             if (f.stick_from_menu && in.x == 0 && in.y == 0) f.stick_from_menu = false;
+             if (f.stick_from_menu) in.x = in.y = 0;
+             n64_set_buttons(m, 0, in.buttons, in.x, in.y);
++            for (int port = 1; port < 4; port++) {
++                PadState other = gameplay_input(f, port);
++                n64_set_buttons(m, port, other.buttons, other.x, other.y);
++            }
+             f.sent = in;
+ 
+             uint64_t interpreted = m->cpu.interpreted;
+             n64_run_frame(m);
++            phantom_apply_codes(m, phantom_codes);
+             f.interpreted_last_frame = m->cpu.interpreted - interpreted;
+             if (limit_frames > 0 && (long)m->frame_count >= limit_frames) running = false;
+             f.fps_frames++;
+@@ -1692,6 +1881,7 @@ int n64_sdl_main(int argc, char **argv, const N64RcProgram *program, const char
+     ImGui_ImplSDL2_Shutdown();
+     ImGui::DestroyContext();
+     if (f.pad) SDL_GameControllerClose(f.pad);
++    for (SDL_GameController *pad : f.extra_pads) if (pad) SDL_GameControllerClose(pad);
+     if (stream) SDL_FreeAudioStream(stream);
+     if (f.audio) SDL_CloseAudioDevice(f.audio);
+     SDL_DestroyTexture(f.tex);
+diff --git a/runtimes/runtime-n64/src/n64_recomp.c b/runtimes/runtime-n64/src/n64_recomp.c
+index d19b05a..5bca249 100644
+--- a/runtimes/runtime-n64/src/n64_recomp.c
++++ b/runtimes/runtime-n64/src/n64_recomp.c
+@@ -108,6 +108,29 @@ bool n64_rc_install(N64Machine *m, const N64RcProgram *p)
+     return true;
+ }
+ 
++/* A captured RDRAM block may span 4 KiB pages which a game's TLB maps to
++ * unrelated physical pages. Checking only its first translated address and
++ * contiguous physical bytes can select code with the wrong instruction at
++ * the page boundary (including a branch delay slot). Verify the current
++ * virtual-to-physical mapping for each page before entering compiled code. */
++static bool block_mapping_matches(const N64Machine *m, uint32_t key, uint32_t paddr, const N64RcBlock *blk)
++{
++    const uint32_t delta = paddr - blk->paddr;
++    if (key < delta) return false;
++    const uint32_t base = key - delta;
++    const uint64_t end = (uint64_t)base + blk->size;
++    if (!blk->size || end > 0x100000000ull) return false;
++    uint64_t va = base;
++    while (va < end) {
++        uint32_t actual;
++        const uint64_t signed_va = (uint64_t)(int64_t)(int32_t)(uint32_t)va;
++        if (!n64_cpu_translate_quiet(&m->cpu, signed_va, &actual) ||
++            (uint64_t)actual != (uint64_t)blk->paddr + (va - base)) return false;
++        va = (va | 0xfffull) + 1u;
++    }
++    return true;
++}
++
+ N64RcFunc n64_rc_lookup(N64Machine *m, uint64_t pc)
+ {
+     const N64RcProgram *p = m->rc_program;
+@@ -127,6 +150,10 @@ N64RcFunc n64_rc_lookup(N64Machine *m, uint64_t pc)
+             }
+             const N64RcBlock *blk = &p->blocks[e->block];
+             if (paddr >= blk->paddr && paddr < blk->paddr + blk->size) {
++                if (!block_mapping_matches(m, key, paddr, blk)) {
++                    slot = (slot + 1u) & m->rc_hash_mask;
++                    continue;
++                }
+                 if (!m->rc_verified[e->block]) {
+                     if (blk->paddr + blk->size <= m->rdram_size &&
+                         memcmp(m->rdram + blk->paddr, blk->bytes, blk->size) == 0)
+diff --git a/tests/n64/recomp.cmake b/tests/n64/recomp.cmake
+index cb7795a..d42762e 100644
+--- a/tests/n64/recomp.cmake
++++ b/tests/n64/recomp.cmake
+@@ -2,6 +2,9 @@
+ # recompiled from the boot image, recompiled with a profile, and in
+ # --differential lockstep (tests/n64/recompile_fixture.py).
+ if(TARGET n64recomp AND TARGET n64_run)
++    add_executable(n64_recomp_tlb_test "${CMAKE_CURRENT_SOURCE_DIR}/n64_recomp_tlb_test.c")
++    target_link_libraries(n64_recomp_tlb_test PRIVATE n64runtime)
++    add_test(NAME n64_recomp_tlb_mapping COMMAND n64_recomp_tlb_test)
+     add_test(
+         NAME n64_recompile_fixture
+         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/recompile_fixture.py"

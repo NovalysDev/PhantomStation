@@ -1,0 +1,36 @@
+diff --git a/tools/new_project_layout/setup_project.ps1 b/tools/new_project_layout/setup_project.ps1
+index 8c29805c..dbd0b0b0 100644
+--- a/tools/new_project_layout/setup_project.ps1
++++ b/tools/new_project_layout/setup_project.ps1
+@@ -414,7 +414,10 @@ Write-Host "  build:      $doBuild"
+ Write-Host "  github:     $createGithub"
+ Write-Host "  region:     $Region"
+ 
+-New-Item -ItemType Directory -Path $Root | Out-Null
++New-Item -ItemType Directory -Path $Root -ErrorAction Stop | Out-Null
++if ($env:PHANTOM_BUILD_TOKEN -match '^[a-f0-9]{32}$') {
++    [System.IO.File]::WriteAllText((Join-Path $Root '.phantom-build-token'), $env:PHANTOM_BUILD_TOKEN)
++}
+ Set-Location $Root
+ git init -q
+ 
+@@ -806,15 +809,10 @@ if ($doGenerate) {
+         & $Python @genArgs
+         if ($LASTEXITCODE -ne 0) { throw "psxrecomp_cli generate failed (exit $LASTEXITCODE)" }
+         $GeneratedOk = $true
+-        # Release CI builds the compiled game from this tree, so it is part
+-        # of the repo, not a local by-product.
+-        git add generated 2>$null
+-        git -c user.email=setup@localhost -c user.name=setup commit -q -m "Add generated game C" 2>$null
+-        if ($LASTEXITCODE -eq 0) {
+-            Write-Host "  generate OK (generated/ committed -- release CI builds from it)"
+-        } else {
+-            Write-Host "  generate OK -- commit generated/ before tagging a release: git add generated"
+-        }
++        # PhantomStation builds locally and does not require a Git commit.
++        # Git warnings on stderr can otherwise abort this PowerShell script
++        # even when generation itself succeeded.
++        Write-Host "  generate OK (generated files ready for local compilation)"
+     } catch {
+         Write-Warning "Generate failed -- fix seeds/disc and re-run generate by hand."
+         $doBuild = $false

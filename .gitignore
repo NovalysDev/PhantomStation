@@ -1,0 +1,37 @@
+# Personal game data, saves and build results
+*.iso
+*.bin
+*.cue
+*.sbi
+*.z64
+*.n64
+*.v64
+*.nes
+*.sfc
+*.smc
+*.sav
+*.state
+*.mcd
+*.ps2
+*.exe
+*.dll
+*.zip
+*.7z
+*.part
+*.log
+*.trace
+*.pyc
+__pycache__/
+.venv/
+build*/
+projets/
+descripteurs/
+sauvegardes-de-test/
+Jeux en un fichier/
+toolchain/
+test-local/
+# Dependency checkouts are reconstructed separately from pinned revisions.
+psxrecomp/
+ps2-native-recomp/
+nintendo-recomp/
+n64-recomp-lab/moteur-n64-commun/

@@ -1,0 +1,153 @@
+diff --git a/native/hostkit/adapters/rrhk_nes.c b/native/hostkit/adapters/rrhk_nes.c
+index 3e1cd19..2faf461 100644
+--- a/native/hostkit/adapters/rrhk_nes.c
++++ b/native/hostkit/adapters/rrhk_nes.c
+@@ -34,7 +34,7 @@ static const RrhkAction actions[ACTIONS] = {
+ /* Host-only extra sprites per scanline (F5); the Zapper options have their own F2 page. */
+ static int extra_sprites;
+ 
+-static int players(void) { return 2; }
++static int players(void) { const char *limit = SDL_getenv("PHANTOM_MAX_PLAYERS"); return limit && limit[0] == '1' && !limit[1] ? 1 : 2; }
+ static int width(void) { return 256; }
+ static int height(void) { return 240; }
+ 
+diff --git a/native/hostkit/adapters/rrhk_snes.c b/native/hostkit/adapters/rrhk_snes.c
+index 1636c3b..b56e06e 100644
+--- a/native/hostkit/adapters/rrhk_snes.c
++++ b/native/hostkit/adapters/rrhk_snes.c
+@@ -38,7 +38,14 @@ static void help_controls(RrhkUi *ui, const RrhkMenuCtx *ctx, int y) {
+     rrhk_help_sound_line(ctx, y + 2 * RR_MENU_LINE);
+ }
+ 
+-static int players(void) { return 2; }
++static int players(void) { const char *limit = SDL_getenv("PHANTOM_MAX_PLAYERS"); return limit && limit[0] >= '1' && limit[0] <= '5' && !limit[1] ? limit[0] - '0' : 2; }
++static void before_frame(const RrhkAudioProbe *audio, uint64_t frame) {
++    (void)audio;
++    for (int seat = 2; seat < 5; ++seat) {
++        bool connected = seat < players() && rrhk_ui()->pads[seat] != NULL;
++        rr16_snes_extra_pad(seat, connected ? rrhk_pad_word(seat, frame) : 0, connected);
++    }
++}
+ static int display_width(void) { return 256; }
+ static void pointer_input(RrhkPointer p) {
+     rr16_gun_input((Rr16GunInput){.x = p.x, .y = p.y, .fire = p.fire, .aux = p.aux, .secondary = p.secondary,
+@@ -53,12 +60,12 @@ const RrhkMachine *rrhk_adapter(void) {
+     if (!machine.actions) {
+         machine = (RrhkMachine){
+             .ini_section = RR16_SECTION, .console_name = RR16_CONSOLE,
+-            .table_players = 2, .players = players,
++            .table_players = 5, .players = players,
+             .actions = actions, .action_count = ACTIONS,
+             .up = UP, .down = DOWN, .left = LEFT, .right = RIGHT, .start = START,
+             .max_width = RR16_WIDTH, .max_height = RR16_HEIGHT, .frame_seconds = RR16_FRAME_SECONDS,
+             .pointer = RR16_GUN,
+-            .reset = rr16_reset, .run_frame = rr16_frame, .pause = rr16_pause,
++            .reset = rr16_reset, .run_frame = rr16_frame, .before_frame = before_frame, .pause = rr16_pause,
+             .pixels = rr16_pixels, .visible_width = rr16_visible_width, .visible_height = rr16_visible_height,
+             .raster_height = rr16_raster_height, .display_width = display_width,
+             .audio = rr16_audio, .interpreted = rr16_interpreted, .audio_interpreted = rr16_audio_interpreted,
+diff --git a/native/hostkit/hostkit.h b/native/hostkit/hostkit.h
+index d3d657e..69e9cbb 100644
+--- a/native/hostkit/hostkit.h
++++ b/native/hostkit/hostkit.h
+@@ -27,7 +27,7 @@
+ extern "C" {
+ #endif
+ 
+-#define RRHK_MAX_PLAYERS 4
++#define RRHK_MAX_PLAYERS 5
+ #define RRHK_MAX_ACTIONS 12
+ 
+ /* Menu numbers of RrhkUi.menu (options.c checks them against game_options.h). */
+diff --git a/native/hostkit/shell/rrhk_input.c b/native/hostkit/shell/rrhk_input.c
+index f0a7e50..1b34134 100644
+--- a/native/hostkit/shell/rrhk_input.c
++++ b/native/hostkit/shell/rrhk_input.c
+@@ -31,6 +31,8 @@ void rrhk_bind(const RrhkMachine *machine) {
+     for (int p = 0; p < RRHK_MAX_PLAYERS; ++p) for (int a = 0; a < machine->action_count; ++a) {
+         rrhk.keys[p][a] = machine->actions[a].key[p];
+         rrhk.buttons[p][a] = machine->actions[a].pad[p];
++        if (p >= 2 && machine->ini_section && wcscmp(machine->ini_section, L"SNES") == 0)
++            rrhk.buttons[p][a] = machine->actions[a].pad[0];
+     }
+     if (machine->video_section) swprintf(rrhk.video_section, 64, L"%ls", machine->video_section);
+     else swprintf(rrhk.video_section, 64, L"%ls.Video", machine->ini_section);
+diff --git a/native/hostkit/shell/rrhk_main.c b/native/hostkit/shell/rrhk_main.c
+index e3c44c0..0ef2ebf 100644
+--- a/native/hostkit/shell/rrhk_main.c
++++ b/native/hostkit/shell/rrhk_main.c
+@@ -137,6 +137,9 @@ static bool open_run(const RrhkMachine *m, const char *title, int scale) {
+     if (m->sound_ready) m->sound_ready();
+     if (m->own_audio && !m->driven && m->audio_reopen && rrhk_audio_device()) m->audio_reopen();
+     rrhk_open_pads();
++    const char *phantom_menu = SDL_getenv("PHANTOM_OPEN_MENU");
++    if (phantom_menu && !strcmp(phantom_menu, "controls")) rrhk.menu = RRHK_MENU_CONTROLS;
++    else if (phantom_menu && !strcmp(phantom_menu, "settings")) rrhk.menu = RRHK_MENU_OPTIONS;
+     r->frequency = SDL_GetPerformanceFrequency();
+     r->next = SDL_GetPerformanceCounter();
+     r->test_started = r->next;
+@@ -220,7 +223,9 @@ static bool begin_frame(RrhkRun *r) {
+                                     (unsigned)r->have.freq, r->have.samples};
+             m->before_frame(&probe, input_frame);
+         }
+-        if (!m->run_frame(pad1, m->pointer && !m->pointer_keeps_player2 ? 0 : rrhk_pad_word(1, input_frame))) { r->running = false; return false; }
++        const char *player_limit = SDL_getenv("PHANTOM_MAX_PLAYERS");
++        bool second_disabled = player_limit && strcmp(player_limit, "1") == 0;
++        if (!m->run_frame(pad1, second_disabled || (m->pointer && !m->pointer_keeps_player2) ? 0 : rrhk_pad_word(1, input_frame))) { r->running = false; return false; }
+         ++r->frame;
+         r->ran_frame = true;
+     }
+diff --git a/native/platform_io.h b/native/platform_io.h
+index c8883d2..90c610c 100644
+--- a/native/platform_io.h
++++ b/native/platform_io.h
+@@ -28,6 +28,9 @@ static inline int rr_ini_set(const wchar_t *s,const wchar_t *k,const wchar_t *v,
+ static inline unsigned long rr_process_id(void) { return GetCurrentProcessId(); }
+ static inline int rr_flush_file(FILE *f) { return fflush(f)==0 && _commit(_fileno(f))==0; }
+ static inline int rr_executable_directory(wchar_t *out,size_t cap) {
++    /* PhantomStation supplies a per-game Documents directory for saves/settings. */
++    DWORD userDir=GetEnvironmentVariableW(L"PHANTOM_RUNTIME_DATA_ROOT",out,(DWORD)cap);
++    if(userDir) return userDir<cap;
+     DWORD n=GetModuleFileNameW(NULL,out,(DWORD)cap);
+     if(!n || n>=cap)return 0;
+     wchar_t *slash=wcsrchr(out,L'\\'); if(!slash)return 0; *slash=0;return 1;
+diff --git a/native/retro_console16.h b/native/retro_console16.h
+index febec54..0d6c4ce 100644
+--- a/native/retro_console16.h
++++ b/native/retro_console16.h
+@@ -48,6 +48,7 @@ void rr16_host_discontinuity(void);
+ #define RR16_CONSOLE "Super Nintendo"
+ #define RR16_FRAME_SECONDS RR_SN_FRAME_SECONDS
+ uint64_t rr16_device_interpreted(void);
++void rr16_snes_extra_pad(int slot, uint16_t buttons, bool connected);
+ #endif
+ bool rr16_init(bool headless);
+ void rr16_reset(void);
+diff --git a/native/snes_backend.c b/native/snes_backend.c
+index 9f797f7..0ec7a8e 100644
+--- a/native/snes_backend.c
++++ b/native/snes_backend.c
+@@ -113,6 +113,11 @@ bool rr16_init(bool headless) {
+     if(!rom || resource_size!=RR_SN_ROM_BYTES)return false;
+     RtlRegisterGame(&game_info);
+     if (!SnesInit(rom, RR_SN_ROM_BYTES)) return false;
++    const char *max_players = getenv("PHANTOM_MAX_PLAYERS");
++    if (!headless && max_players && max_players[0] >= '3' && max_players[0] <= '5' && !max_players[1]) {
++        RtlSetMultitap(0, 0);
++        RtlSetMultitap(1, 1);
++    }
+     rr_snes_native_bind();
+     if (g_snes->cart->ramSize != RR_SN_RAM_BYTES) return false;
+     wchar_t battery_path[32768];
+@@ -158,6 +163,11 @@ static void observe_video_mode(const Ppu *ppu, unsigned line, void *context) {
+     field_hires |= PPU_pseudoHires(ppu) || PPU_mode(ppu) == 5 || PPU_mode(ppu) == 6;
+ }
+ static uint64_t chip_interpreted(void);
++void rr16_snes_extra_pad(int slot, uint16_t buttons, bool connected) {
++    if (slot < 2 || slot > 4) return;
++    RtlSetPadState(slot, buttons);
++    RtlSetPadConnected(slot, connected ? 1 : 0);
++}
+ bool rr16_frame(uint16_t p1, uint16_t p2) {
+     RtlRunFrame(p1 | ((uint32_t)p2 << 12));
+     ++run_frames;

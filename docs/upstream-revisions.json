@@ -1,0 +1,7 @@
+{
+  "psxrecomp.patch": "a7b37e079e8c6e98e04cd1cd42ba559e95911ea7",
+  "ps2-native-recomp.patch": "783b4b1fc39330033b6f73f070c4185d2a6309b7",
+  "retrorecomp.patch": "850cf2de4adc126a2a0c9c9e7f39ec8c863323a8",
+  "goldeneye-pc-pal.patch": "fda76b69837e6c5aae436e0d3e798989e49b06d2",
+  "native-console.patch": "13b28284c0380016a8f0d568ed7a089f62227d09"
+}

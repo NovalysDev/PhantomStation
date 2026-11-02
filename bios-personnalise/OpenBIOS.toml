@@ -1,0 +1,26 @@
+[program]
+name = "PhantomStation OpenBIOS experimental"
+id = "OPENBIOS"
+rom = "bios/openbios.bin"
+load_address = "0xBFC00000"
+entry_pc = "0xBFC00000"
+text_size = "0x80000"
+[program.image]
+sha256 = "7b3655e7caa3f5e404f361f6068a4690d840ccae901d288e92af517d02edb664"
+license = "MIT"
+redistributable = true
+[recompiler]
+seeds = "recompiler/seeds/phantom_elf_seeds.json"
+out_dir = "generated"
+out_stem = "OpenBIOS"
+strict = true
+[recompiler.address_model]
+normalize_mask = "0x1FFFFFFF"
+[[recompiler.address_model.copy]]
+name = "Kernel ramtext"
+rom_lo = "0x1FC224F4"
+rom_hi = "0x1FC26A74"
+ram_lo = "0x00000500"
+runtime_base = "0x00000500"
+dispatch_key = "ram"
+kernel_bless = true

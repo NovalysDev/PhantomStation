@@ -1,0 +1,44 @@
+diff --git a/port/fast3d/gfx_sdl2.cpp b/port/fast3d/gfx_sdl2.cpp
+index 5ea2131..752af99 100644
+--- a/port/fast3d/gfx_sdl2.cpp
++++ b/port/fast3d/gfx_sdl2.cpp
+@@ -1,6 +1,7 @@
+ #include <stdio.h>
+ #include <SDL.h>
+ #include <time.h>
++#include <cstring>
+ 
+ #include "platform.h"
+ #include "system.h"
+diff --git a/port/src/libultra.c b/port/src/libultra.c
+index 4e9869c..895bc91 100644
+--- a/port/src/libultra.c
++++ b/port/src/libultra.c
+@@ -24,6 +24,7 @@
+  * short sleep instead of sched_yield(). */
+ #include <pthread.h>
+ #include <stdlib.h>
++#include <stdio.h>
+ #include <string.h>
+ #include <stdint.h>
+ #include <time.h>
+diff --git a/port/src/system.c b/port/src/system.c
+index 48e73c9..4941422 100644
+--- a/port/src/system.c
++++ b/port/src/system.c
+@@ -283,6 +283,15 @@ const char *sysResolvePath(const char *path)
+     }
+     if (!strncmp(path, "$S/", 3)) {
+ #if defined(PLATFORM_WINDOWS)
++        /* PhantomStation owns the save directory; keep ROM and generated
++         * assets in the private game cache, but persist only these two files
++         * in Documents. With no launcher variable, retain upstream behavior. */
++        const char *phantomSaveDir = getenv("PHANTOM_RUNTIME_DATA_ROOT");
++        if (phantomSaveDir && phantomSaveDir[0] &&
++            (!strcmp(path + 3, "ge007.eep") || !strcmp(path + 3, "ge007.ini"))) {
++            snprintf(out, sizeof(out), "%s\\%s", phantomSaveDir, path + 3);
++            return out;
++        }
+         if (_access("data", 0) == 0)
+             snprintf(out, sizeof(out), "data\\%s", path + 3);
+         else

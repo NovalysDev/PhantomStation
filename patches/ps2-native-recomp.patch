@@ -1,0 +1,95 @@
+diff --git a/host/pad_test.cpp b/host/pad_test.cpp
+index bed07ee..0038326 100644
+--- a/host/pad_test.cpp
++++ b/host/pad_test.cpp
+@@ -22,6 +22,8 @@
+ #include <utility>
+ #include <vector>
+ 
++namespace ps2 { void latch_pads_for_test(); }
++
+ namespace {
+ 
+ int g_checks = 0, g_failed = 0;
+@@ -40,6 +42,7 @@ void check(bool ok, const char *format, ...) {
+ // One exchange with the controller in `port` (0 or 1) as the IOP's pad driver makes it: the command bytes go into the SIO2
+ // FIFO and the same number of bytes comes back.
+ std::vector<std::uint8_t> exchange(int port, std::vector<std::uint8_t> command) {
++    ps2::latch_pads_for_test();
+     namespace sio2 = ps2::iop::sio2;
+     sio2::write(0x1F808268u, 0xCu);
+     const auto n = static_cast<std::uint32_t>(command.size());
+@@ -312,6 +315,24 @@ int main() {
+         check(buttons(poll_state(0)) == 0 && poll_state(0)[1] == 0x79, "port 1 is not disturbed");
+     }
+ 
++    std::printf("PhantomStation player limit\n");
++    {
++        SDL_setenv("PHANTOM_MAX_PLAYERS", "1", 1);
++        plug(1);
++        poll_input();
++        check(exchange(1, {0x01, 0x42, 0x00, 0x00, 0x00})[1] == 0xFF,
++              "one-player limit keeps the second port disconnected");
++        unplug(1);
++        poll_input();
++        SDL_setenv("PHANTOM_MAX_PLAYERS", "2", 1);
++        plug(1);
++        poll_input();
++        check(exchange(1, {0x01, 0x42, 0x00, 0x00, 0x00})[1] != 0xFF,
++              "two-player limit admits the second controller");
++        unplug(1);
++        poll_input();
++    }
++
+     unplug(0);
+     poll_input();
+     std::printf("pad test: %d checks, %d failed\n", g_checks, g_failed);
+diff --git a/host/window.cpp b/host/window.cpp
+index b9d4aba..766d2a5 100644
+--- a/host/window.cpp
++++ b/host/window.cpp
+@@ -129,9 +129,11 @@ std::atomic<int> g_beep_request{0};
+ bool g_beep_on = true;
+ 
+ void refresh_title() {
+-    std::string title = g_speed_title;
+-    if (!g_notice_text.empty()) title = g_notice_text + "   |   " + title;
+-    if (!g_game_title.empty()) title = g_game_title + "   |   " + title;
++    const bool show_speed = ps2::os::env("PHANTOM_PS2_HIDE_FPS") != "1";
++    std::string title = show_speed ? g_speed_title : std::string();
++    if (!g_notice_text.empty()) title = g_notice_text + (title.empty() ? "" : "   |   " + title);
++    if (!g_game_title.empty()) title = g_game_title + (title.empty() ? "" : "   |   " + title);
++    if (title.empty()) title = "PhantomStation";
+     SDL_SetWindowTitle(g_window, title.c_str());
+ }
+ 
+@@ -244,10 +246,14 @@ const char *or_unknown(const char *name) { return name ? name : "a controller";
+ 
+ // a new controller takes the first free port, the second one plugs in player 2
+ void open_pad(int device) {
++    const char *test_only = std::getenv("PHANTOM_TEST_VIRTUAL_ONLY");
++    if (test_only && std::string(test_only) == "1" && !SDL_JoystickIsVirtual(device)) return;
+     const SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(device);
+     for (SDL_GameController *pad : g_pads)
+         if (pad && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)) == id) return;
+-    for (int port = 0; port < 2; ++port)
++    const char *limit = SDL_getenv("PHANTOM_MAX_PLAYERS");
++    const int max_ports = limit && std::string(limit) == "1" ? 1 : 2;
++    for (int port = 0; port < max_ports; ++port)
+         if (!g_pads[port]) {
+             g_pads[port] = SDL_GameControllerOpen(device);
+             if (g_pads[port]) std::fprintf(stderr, "[pad] %s (%s) in port %d\n", or_unknown(SDL_GameControllerName(g_pads[port])), pad_kind(g_pads[port]), port + 1);
+diff --git a/runtime/src/system.cpp b/runtime/src/system.cpp
+index 291555a..0866642 100644
+--- a/runtime/src/system.cpp
++++ b/runtime/src/system.cpp
+@@ -325,6 +325,9 @@ void idle(Cpu &c) {
+ 
+ }
+ 
++// Used by the standalone controller test to model the normal frame boundary.
++void latch_pads_for_test() { latch_pads(); }
++
+ void save_context(const Cpu &c, ThreadContext &t) {
+     std::memcpy(t.r, c.r, sizeof t.r);
+     t.hi = c.hi;

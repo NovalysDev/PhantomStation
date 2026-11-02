@@ -1,6 +1,6 @@
 # PhantomStation
 
-**Pour utiliser PhantomStation :** télécharge `PhantomStation-portable-essai.zip` dans la [version de test GitHub](https://github.com/NovalysDev/PhantomStation/releases), extrais-le dans un dossier et ouvre `PhantomStation.exe`. Les moteurs et outils sont inclus.
+**Pour utiliser PhantomStation :** la version portable `PhantomStation-portable-essai.zip` est en préparation et n’est pas encore disponible publiquement. Une fois publiée dans les [versions GitHub](https://github.com/NovalysDev/PhantomStation/releases), extrais-la dans un dossier et ouvre `PhantomStation.exe`. Les moteurs et outils sont inclus.
 
 **Pour les développeurs :** `PhantomStation-sources-sans-dependances.zip` contient les sources, sans l’EXE ni les outils ; il ne fonctionne pas seul. Ces versions restent expérimentales.
 

@@ -47,18 +47,18 @@ class NintendoGameForm : Form {
 
     void RefreshControllers() {
         if (controllerList == null) return;
-        if (!sdlReady) { controllerList.Text = "Détection des manettes indisponible."; return; }
+        if (!sdlReady) { controllerList.Text = PhantomLanguage.English ? "Controller detection unavailable." : "Détection des manettes indisponible."; return; }
         try {
             SDL_JoystickUpdate();
             int player = 0; var text = new StringBuilder();
             for (int i = 0; i < SDL_NumJoysticks() && player < maxPlayers; i++) {
                 if (SDL_IsGameController(i) == 0) continue;
-                player++; text.Append("Joueur ").Append(player).Append(" : ").Append(Utf8(SDL_GameControllerNameForIndex(i))).Append('\n');
+                player++; text.Append(PhantomLanguage.English ? "Player " : "Joueur ").Append(player).Append(" : ").Append(Utf8(SDL_GameControllerNameForIndex(i))).Append('\n');
             }
             for (int i = player + 1; i <= maxPlayers; i++)
-                text.Append("Joueur ").Append(i).Append(i == 1 ? " : clavier disponible" : " : aucune manette").Append('\n');
+                text.Append(PhantomLanguage.English ? "Player " : "Joueur ").Append(i).Append(PhantomLanguage.English ? (i == 1 ? " : keyboard available" : " : no controller") : (i == 1 ? " : clavier disponible" : " : aucune manette")).Append('\n');
             controllerList.Text = text.ToString().TrimEnd();
-        } catch { controllerList.Text = "Détection des manettes indisponible."; }
+        } catch { controllerList.Text = PhantomLanguage.English ? "Controller detection unavailable." : "Détection des manettes indisponible."; }
     }
 
     static void Rounded(Control control, int radius) {
@@ -97,7 +97,7 @@ class NintendoGameForm : Form {
         using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("art"))
         using (var image = Image.FromStream(stream)) background = new Bitmap(image);
         BackgroundImage = background; BackgroundImageLayout = ImageLayout.Stretch;
-        var title = new Label { Text = UniqueLauncher.PreparedGameTitle, ForeColor = Color.White,
+        var title = new Label { Text = UniqueLauncher.PreparedGameTitle, Tag = "PhantomKeepText", ForeColor = Color.White,
             Font = new Font("Segoe UI", 22, FontStyle.Bold), BackColor = Color.Transparent,
             Location = new Point(35, 32), Size = new Size(770, 47) };
         Controls.Add(title);
@@ -107,7 +107,7 @@ class NintendoGameForm : Form {
         Controls.Add(subtitle);
         var panel = new Panel { BackColor = Color.FromArgb(14, 29, 46), Location = new Point(35, 135), Size = new Size(485, 230) };
         Rounded(panel, 16); Controls.Add(panel);
-        panel.Controls.Add(new Label { Text = genericN64 ? "MANETTES  ·  JUSQU’À " + maxPlayers + " JOUEUR" + (maxPlayers > 1 ? "S" : "") : "TON JEU EST PRÊT", ForeColor = Color.FromArgb(104, 225, 238),
+        panel.Controls.Add(new Label { Text = genericN64 ? (PhantomLanguage.English ? "CONTROLLERS  ·  UP TO " + maxPlayers + " PLAYERS" : "MANETTES  ·  JUSQU’À " + maxPlayers + " JOUEUR" + (maxPlayers > 1 ? "S" : "")) : "TON JEU EST PRÊT", ForeColor = Color.FromArgb(104, 225, 238),
             Font = new Font("Segoe UI", 10, FontStyle.Bold), Location = new Point(22, 20), AutoSize = true });
         if (genericN64) {
             controllerList = new Label { ForeColor = Color.White, Font = new Font("Segoe UI", 10),
@@ -130,7 +130,7 @@ class NintendoGameForm : Form {
             codesButton.Click += delegate {
                 var page = new NintendoCodesPanel(saves);
                 page.Done += delegate { Controls.Remove(page); page.Dispose(); };
-                Controls.Add(page); page.BringToFront();
+                Controls.Add(page); PhantomLanguage.Apply(page); page.BringToFront();
             };
             panel.Controls.Add(codesButton);
             panel.Controls.Add(new Label { Text = "Commandes communes · F10 en jeu · compatibilité à vérifier", ForeColor = Color.FromArgb(154, 180, 196),
@@ -166,6 +166,7 @@ class NintendoGameForm : Form {
             Location = new Point(620, 464), Anchor = AnchorStyles.Right | AnchorStyles.Bottom, Cursor = Cursors.Hand };
         play.FlatAppearance.BorderSize = 0; Rounded(play, 12); play.Click += StartGame; Controls.Add(play);
         session = new PhantomEmbeddedGame(this);
+        PhantomLanguage.Apply(this);
     }
 
     async void StartGame(object sender, EventArgs e) {
@@ -175,6 +176,7 @@ class NintendoGameForm : Form {
         if (codesButton != null) codesButton.Enabled = false;
         try {
             var start = new ProcessStartInfo(game) { WorkingDirectory = Path.GetDirectoryName(game), UseShellExecute = false };
+            start.EnvironmentVariables["PHANTOM_LANGUAGE"] = PhantomLanguage.English ? "en" : "fr";
             start.EnvironmentVariables["PHANTOM_RUNTIME_DATA_ROOT"] = saves;
             start.EnvironmentVariables["PHANTOM_MAX_PLAYERS"] = maxPlayers.ToString();
             if (!n64 && maxPlayers > 2) start.EnvironmentVariables["SNES_MULTITAP"] = "port2";

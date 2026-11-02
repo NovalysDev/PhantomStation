@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -15,6 +16,89 @@ using System.Windows.Forms;
 
 // The appended ZIP contains the game files. The per-package cache retains
 // runtime settings; default saves are stored in the user's Documents folder.
+static class PhantomLanguage {
+    public static bool English {
+        get {
+            try {
+                string selected = Environment.GetEnvironmentVariable("PHANTOM_LANGUAGE");
+                if (selected == "en" || selected == "fr") return selected == "en";
+                string file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PhantomStation", "language.txt");
+                return File.Exists(file) && File.ReadAllText(file).Trim() == "en";
+            } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
+        }
+    }
+    static readonly Dictionary<string,string> words = new Dictionary<string,string> {
+        {"PLAYSTATION 2  ·  RECOMPILATION EXPÉRIMENTALE", "PLAYSTATION 2  ·  EXPERIMENTAL RECOMPILATION"},
+        {"NINTENDO 64  ·  RECOMPILATION HYBRIDE EXPÉRIMENTALE", "NINTENDO 64  ·  EXPERIMENTAL HYBRID RECOMPILATION"},
+        {"NINTENDO 64  ·  PORTAGE NATIF EXPÉRIMENTAL", "NINTENDO 64  ·  EXPERIMENTAL NATIVE PORT"},
+        {"NINTENDO  ·  RECOMPILATION EXPÉRIMENTALE", "NINTENDO  ·  EXPERIMENTAL RECOMPILATION"},
+        {"Qualité de l’image", "Image quality"}, {"Résolution normale (1x)", "Normal resolution (1x)"},
+        {"Image plus nette (2x)", "Sharper image (2x)"}, {"Plein écran", "Fullscreen"},
+        {"F1 : commandes   ·   F5 / F8 : sauvegarde rapide", "F1: controls   ·   F5 / F8: quick save"},
+        {"Réglages", "Settings"}, {"▶   JOUER", "▶   PLAY"}, {"TON JEU EST PRÊT", "YOUR GAME IS READY"},
+        {"CONFIGURER LES MANETTES", "CONFIGURE CONTROLLERS"}, {"VIDÉO ET SON", "VIDEO AND AUDIO"}, {"MANETTES", "CONTROLLERS"},
+        {"Commandes communes · F10 en jeu · compatibilité à vérifier", "Common controls · F10 in game · compatibility varies"},
+        {"Dans le jeu :\nF10  ·  réglages vidéo et commandes\nSauvegardes dans Documents\nManettes configurables dans le jeu", "In game:\nF10  ·  video and controller settings\nSaves in Documents\nControllers are configured in game"},
+        {"Dans le jeu :\nF2  ·  réglages et commandes\nF3  ·  filtres d’image\nF8 / F9  ·  sauvegarde rapide", "In game:\nF2  ·  settings and controls\nF3  ·  image filters\nF8 / F9  ·  quick save and load"},
+        {"Options et codes du jeu dans son menu.", "Game options and cheats are in its menu."},
+        {"Codes de triche : pas encore disponibles.", "Cheat codes are not yet available."},
+        {"Codes Nintendo 64", "Nintendo 64 cheats"}, {"Coche les codes pour les activer au prochain lancement.", "Check codes to enable them next time."},
+        {"Saisie manuelle : codes directs 80 et 81, adaptés à la version exacte du jeu.", "Manual entry: direct 80 and 81 codes for the exact game version."},
+        {"Nom", "Name"}, {"Ajouter", "Add"}, {"Retirer", "Remove"}, {"Retour", "Back"}, {"Enregistrer", "Save"}, {"Annuler", "Cancel"},
+        {"Codes PS2 — PhantomStation", "PS2 cheats — PhantomStation"}, {"Codes PS2", "PS2 cheats"},
+        {"Coche les codes à activer au prochain lancement. Leur effet dépend du jeu.", "Check codes to enable next time. Effects depend on the game."},
+        {"Nom du code", "Code name"}, {"Code direct : 0, 1 ou 2 (ex. 20448F2C 000000C8)", "Direct code: 0, 1 or 2 (e.g. 20448F2C 000000C8)"},
+        {"Codes de données simples uniquement ; codes conditionnels et chiffrés non pris en charge.", "Simple data codes only; conditional and encrypted codes are unsupported."},
+        {"Retirer le code sélectionné", "Remove selected code"}, {"Réglages PS2 — PhantomStation", "PS2 settings — PhantomStation"},
+        {"Réglages du jeu", "Game settings"}, {"Vidéo", "Video"}, {"Manettes et clavier", "Controllers and keyboard"}, {"Audio", "Audio"}, {"Sauvegardes", "Saves"},
+        {"Résolution interne", "Internal resolution"}, {"Normale (1x)", "Normal (1x)"}, {"Plus nette (2x)", "Sharper (2x)"},
+        {"Lissage et netteté", "Smoothing and sharpness"}, {"Pixels nets", "Crisp pixels"}, {"Pixels nets et bords lissés", "Crisp pixels and smoothed edges"},
+        {"Image douce", "Soft image"}, {"Image douce et bords lissés", "Soft image and smoothed edges"}, {"Netteté renforcée", "Enhanced sharpness"},
+        {"Netteté et bords lissés", "Sharpness and smoothed edges"}, {"Rendu graphique", "Graphics renderer"}, {"Automatique", "Automatic"},
+        {"Format large 16:9 (selon le jeu)", "Widescreen 16:9 (game dependent)"}, {"Synchronisation verticale (si disponible)", "Vertical sync (if available)"},
+        {"Désentrelacement de l’image", "Image deinterlacing"}, {"Afficher les FPS dans le titre de la fenêtre", "Show FPS in the window title"},
+        {"Certaines options dépendent du jeu et de la carte graphique.", "Some options depend on the game and graphics card."},
+        {"Les manettes compatibles sont reconnues automatiquement.", "Compatible controllers are detected automatically."},
+        {"Le moteur PS2 gère actuellement deux ports de manette.", "The PS2 engine currently supports two controller ports."},
+        {"F1 affiche les commandes en jeu. Le clavier est personnalisable.", "F1 shows the controls in game. Keyboard mappings can be changed."},
+        {"Configurer le clavier", "Configure keyboard"}, {"F2 : style d’image  ·  F5 : sauvegarde rapide  ·  F8 : chargement", "F2: image style  ·  F5: quick save  ·  F8: load"},
+        {"Adapter le son quand le jeu ralentit", "Adjust audio when the game slows down"},
+        {"Quand cette option est désactivée, le son peut se couper si le jeu ralentit.", "When disabled, audio may break up if the game slows down."},
+        {"Carte mémoire PS2 et sauvegardes rapides dans Documents.", "PS2 memory card and quick saves are in Documents."},
+        {"La carte est créée formatée au premier lancement et conservée ensuite.", "The formatted card is created on first launch and kept afterwards."},
+        {"Ouvrir le dossier des sauvegardes", "Open saves folder"}, {"Clavier — PhantomStation PS2", "Keyboard — PhantomStation PS2"},
+        {"Commandes du clavier", "Keyboard controls"}, {"Choisis les touches à utiliser pour chaque bouton PS2.", "Choose the keys for each PS2 button."},
+        {"Bouton PS2", "PS2 button"}, {"Touche", "Key"}, {"Chargement du jeu…", "Loading game…"}, {"Nouvel essai de lancement…", "Retrying launch…"},
+        {"Préparation du jeu…\nLe premier lancement peut prendre quelques instants.", "Preparing the game…\nThe first launch may take a little while."},
+        {"Erreur de lancement — PhantomStation", "Launch error — PhantomStation"}, {"Envoyer le rapport", "Send report"},
+        {"Ouvrir le dossier", "Open folder"}, {"Copier", "Copy"}, {"Fermer", "Close"}
+    };
+    public static string Text(string value) {
+        string translated;
+        return English && value != null && words.TryGetValue(value, out translated) ? translated : value;
+    }
+    public static void Apply(Control root) {
+        if (!English) return;
+        if (!Object.Equals(root.Tag, "PhantomKeepText") && (root is Label || root is Button || root is CheckBox || root is GroupBox || root is Form))
+            root.Text = Text(root.Text);
+        var combo = root as ComboBox;
+        if (combo != null) {
+            int selected = combo.SelectedIndex;
+            for (int i = 0; i < combo.Items.Count; i++) {
+                var item = combo.Items[i] as string;
+                if (item != null && Text(item) != item) combo.Items[i] = Text(item);
+            }
+            if (selected >= 0 && selected < combo.Items.Count) combo.SelectedIndex = selected;
+        }
+        var grid = root as DataGridView;
+        if (grid != null) {
+            foreach (DataGridViewColumn column in grid.Columns) column.HeaderText = Text(column.HeaderText);
+            foreach (DataGridViewRow row in grid.Rows) if (row.Cells.Count > 0 && row.Cells[0].Value is string) row.Cells[0].Value = Text((string)row.Cells[0].Value);
+        }
+        foreach (Control child in root.Controls) Apply(child);
+    }
+}
+
 class UniqueLauncher : Form {
     public static string PackagePath {
         get {
@@ -378,6 +462,7 @@ class PreparingForm : Form {
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false;
         Controls.Add(new Label { Text = "Préparation du jeu…\nLe premier lancement peut prendre quelques instants.",
                                  AutoSize = true, Location = new Point(24,25), Font = new Font("Segoe UI",10) });
+        PhantomLanguage.Apply(this);
         Shown += (s,e) => { task = Task.Run(() => UniqueLauncher.Prepare()); timer.Start(); };
         timer.Interval = 100; timer.Tick += Tick;
         FormClosed += (s,e) => timer.Stop();
@@ -394,6 +479,7 @@ class PreparingForm : Form {
             string intro = Path.Combine(Path.GetDirectoryName(game), "phantom-intro.exe");
             start.EnvironmentVariables["PHANTOM_SPLASH_EXE"] = File.Exists(intro) ? intro : Application.ExecutablePath;
             start.EnvironmentVariables["PHANTOM_GAME_TITLE"] = UniqueLauncher.PreparedGameTitle;
+            start.EnvironmentVariables["PHANTOM_LANGUAGE"] = PhantomLanguage.English ? "en" : "fr";
             if (UniqueLauncher.PreparedDocumentsSaves) start.EnvironmentVariables["PHANTOM_SAVES_DIR"] = UniqueLauncher.PrepareSaveDirectory(game);
             var process = Process.Start(start);
             if (process != null) {
@@ -457,9 +543,10 @@ static class PhantomLaunchReport {
     }
     public static void Show(IWin32Window owner, Exception error, string executable) {
         string title = String.IsNullOrWhiteSpace(UniqueLauncher.PreparedGameTitle) ? Path.GetFileNameWithoutExtension(executable) : UniqueLauncher.PreparedGameTitle;
-        string report = "Rapport de lancement PhantomStation\r\nDate : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss zzz") +
-                        "\r\nJeu : " + title + "\r\nFichier : " + executable + "\r\nSystème : " + Environment.OSVersion +
-                        "\r\nWindows 64 bits : " + Environment.Is64BitOperatingSystem + "\r\n\r\n--- Erreur de lancement ---\r\n" + error;
+        bool english = PhantomLanguage.English;
+        string report = (english ? "PhantomStation launch report\r\nDate: " : "Rapport de lancement PhantomStation\r\nDate : ") + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss zzz") +
+                        (english ? "\r\nGame: " : "\r\nJeu : ") + title + (english ? "\r\nFile: " : "\r\nFichier : ") + executable + (english ? "\r\nSystem: " : "\r\nSystème : ") + Environment.OSVersion +
+                        "\r\nWindows 64 bits : " + Environment.Is64BitOperatingSystem + (english ? "\r\n\r\n--- Launch error ---\r\n" : "\r\n\r\n--- Erreur de lancement ---\r\n") + error;
         string path = null;
         try {
             string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PhantomStation", "Rapports");
@@ -468,7 +555,8 @@ static class PhantomLaunchReport {
         using (var dialog = new Form { Text = "Erreur de lancement — PhantomStation", Width = 760, Height = 500,
                                       StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false }) {
             var caption = new Label { Dock = DockStyle.Top, Height = 58, Padding = new Padding(12, 8, 12, 0),
-                Text = "Impossible de lancer le jeu. " + (path == null ? "Le rapport n’a pas pu être enregistré." : "Rapport enregistré : " + path) };
+                Text = english ? "Unable to launch the game. " + (path == null ? "The report could not be saved." : "Report saved: " + path)
+                               : "Impossible de lancer le jeu. " + (path == null ? "Le rapport n’a pas pu être enregistré." : "Rapport enregistré : " + path) };
             var preview = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both,
                                         Dock = DockStyle.Fill, Text = report, WordWrap = false };
             var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
@@ -478,12 +566,13 @@ static class PhantomLaunchReport {
             var copy = new Button { Text = "Copier", AutoSize = true };
             bar.Controls.Add(close); bar.Controls.Add(send); bar.Controls.Add(open); bar.Controls.Add(copy);
             dialog.Controls.Add(preview); dialog.Controls.Add(caption); dialog.Controls.Add(bar); dialog.CancelButton = close;
+            PhantomLanguage.Apply(dialog);
             copy.Click += (s, e) => { try { Clipboard.SetText(report); } catch (Exception) {} };
             open.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + Path.GetDirectoryName(path) + "\""); } catch (Exception) {} };
             send.Click += async (s, e) => {
-                send.Enabled = false; send.Text = "Envoi…";
-                try { await Task.Run(() => Send(title, report)); send.Text = "Rapport transmis"; }
-                catch (Exception ex) { send.Enabled = true; send.Text = "Envoyer le rapport"; MessageBox.Show(dialog, "Envoi impossible : " + ex.Message, "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                send.Enabled = false; send.Text = english ? "Sending…" : "Envoi…";
+                try { await Task.Run(() => Send(title, report)); send.Text = english ? "Report sent" : "Rapport transmis"; }
+                catch (Exception ex) { send.Enabled = true; send.Text = english ? "Send report" : "Envoyer le rapport"; MessageBox.Show(dialog, (english ? "Unable to send: " : "Envoi impossible : ") + ex.Message, "PhantomStation", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             };
             dialog.ShowDialog(owner);
         }

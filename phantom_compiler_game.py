@@ -7,7 +7,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
-from phantom_ui import ctk, button, BG, MUTED, TEXT
+from phantom_ui import ctk, button, tr, load_language, BG, MUTED, TEXT
 
 user32 = ctypes.WinDLL('user32', use_last_error=True)
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -55,6 +55,7 @@ class GameInCompiler:
         actual = exe
         environment = os.environ.copy() if env is None else env.copy()
         environment.pop('PHANTOM_PACKAGE_PATH', None)
+        environment['PHANTOM_LANGUAGE'] = load_language()
         from phantom_ps2 import WINDOWS_EXE_LIMIT
         if exe.stat().st_size >= WINDOWS_EXE_LIMIT:
             from phantom_ps2 import large_game_launcher
@@ -81,7 +82,7 @@ class GameInCompiler:
         toolbar = ctk.CTkFrame(self.overlay, fg_color='#101d31', corner_radius=0, height=48)
         toolbar.pack(fill='x')
         button(toolbar, '← Retour au compilateur', self.close_game, width=200).pack(side='left', padx=10, pady=6)
-        self.status = tk.StringVar(value='Ouverture du jeu…')
+        self.status = tk.StringVar(value=tr('Ouverture du jeu…'))
         ctk.CTkLabel(toolbar, textvariable=self.status, text_color=TEXT, anchor='w').pack(side='left', fill='x', expand=True, padx=12)
         self.surface = tk.Frame(self.overlay, bg='#030814', highlightthickness=0)
         self.surface.pack(fill='both', expand=True)
@@ -137,7 +138,7 @@ class GameInCompiler:
         self.resize()
         user32.SetWindowPos(hwnd, None, 0, 0, max(1, self.surface.winfo_width()),
                             max(1, self.surface.winfo_height()), 0x0054)
-        self.status.set('Le jeu est ouvert dans PhantomStation.')
+        self.status.set(tr('Le jeu est ouvert dans PhantomStation.'))
         return True
 
     def _poll(self):
@@ -176,12 +177,12 @@ class GameInCompiler:
             self.after_id = self.root.after(80, self._poll)
         except (OSError, tk.TclError) as exc:
             self._finish()
-            messagebox.showerror('Fenêtre du jeu', str(exc), parent=self.root)
+            messagebox.showerror(tr('Fenêtre du jeu'), str(exc), parent=self.root)
 
     def close_game(self):
         import time
         self.closing = True
-        self.status.set('Fermeture du jeu…')
+        self.status.set(tr('Fermeture du jeu…'))
         if self.child and user32.IsWindow(self.child):
             user32.PostMessageW(self.child, 0x0010, 0, 0)
             self.last_close = time.monotonic()

@@ -7,6 +7,7 @@ import winsound
 
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 from phantom_window_icon import set_window_icon
+from phantom_ui import tr
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
 DURATION = 8.4
@@ -66,7 +67,18 @@ class CompilationProgress:
         return self.value
 
     def text(self, value=None):
-        return f'{self.label} — {int(self.value if value is None else value)} % (progression indicative)'
+        label = self.label
+        for prefix, _, _ in self.STAGES:
+            if label.startswith(prefix):
+                label = tr(prefix) + label[len(prefix):]
+                break
+        else:
+            if label.startswith('Préparation du jeu ') and tr('Compilation en cours') == 'Building':
+                label = 'Preparing ' + label[len('Préparation du jeu '):] + ' game'
+            else:
+                label = tr(label)
+        suffix = 'estimated progress' if tr('Compilation en cours') == 'Building' else 'progression indicative'
+        return f'{label} — {int(self.value if value is None else value)} % ({suffix})'
 
 
 class PhantomIntro:
@@ -139,11 +151,11 @@ class PhantomIntro:
             self.canvas.create_window(self.width//2, int(self.height*.60), window=self.progressbar)
             self.canvas.itemconfigure(self.phase_text, text=self.progress_model.text())
             self.window.after(40, self.animate_progress)
-            self.close_button = tk.Button(self.window, text='Terminé', command=self.finish, state='disabled',
+            self.close_button = tk.Button(self.window, text=tr('Terminé'), command=self.finish, state='disabled',
                 bg='#182b39', fg='#e4f8f5', activebackground='#284453', disabledforeground='#72828c',
                 activeforeground='white', relief='flat', padx=18, pady=7)
             if on_report:
-                self.report_button = tk.Button(self.window, text='Envoyer le rapport', command=on_report,
+                self.report_button = tk.Button(self.window, text=tr('Envoyer le rapport'), command=on_report,
                     bg='#7f2635', fg='#fff5f5', activebackground='#ab3d4d', activeforeground='white',
                     relief='flat', padx=14, pady=7)
                 self.report_button_item = self.canvas.create_window(self.width-120, self.height-12,
@@ -151,7 +163,7 @@ class PhantomIntro:
         else:
             self.canvas.create_text(self.width // 2, int(self.height*.94), text=message,
                                     fill='#c3e7ee', font=('Segoe UI', 9))
-            self.close_button = tk.Button(self.window, text='Passer l’introduction', command=self.finish,
+            self.close_button = tk.Button(self.window, text=tr('Passer l’introduction'), command=self.finish,
                 bg='#182b39', fg='#e4f8f5', activebackground='#284453',
                 activeforeground='white', relief='flat', padx=12, pady=6)
         self.canvas.create_window(self.width-15, self.height-12, anchor='se', window=self.close_button)
@@ -183,7 +195,7 @@ class PhantomIntro:
             alpha = min(1.0, (elapsed-3.5)/1.2)
             color = '#%02x%02x%02x' % tuple(round(a+(b-a)*alpha) for a,b in zip((12,19,30),(243,244,250)))
             self.canvas.create_text(self.width//2, int(self.height*.505),
-                                    text=('Compilation terminée' if self.success else 'Compilation interrompue') if self.progress and self.completed else ('Compilation en cours' if self.progress else 'PlayStation'), fill=color,
+                                    text=(tr('Compilation terminée') if self.success else tr('Compilation interrompue')) if self.progress and self.completed else (tr('Compilation en cours') if self.progress else 'PlayStation'), fill=color,
                                     font=('Segoe UI', 24 if self.progress else 26, 'bold'), tags='playstation-word')
         if elapsed < 5 or not self.progress:
             self.window.after(70, self.draw)
@@ -232,12 +244,13 @@ class PhantomIntro:
                 pass
         self.canvas.delete('playstation-word')
         self.canvas.create_text(self.width//2, int(self.height*.505),
-                                text='Compilation terminée' if success else 'Compilation interrompue',
+                                text=tr('Compilation terminée') if success else tr('Compilation interrompue'),
                                 fill='#f3f4fa', font=('Segoe UI', 24, 'bold'), tags='playstation-word')
         self.progressbar.configure(value=100 if success else self.progressbar['value'])
-        result = f'{message} — 100 %' if success else f'Échec à {int(self.display_value)} % — {message}'
+        failure = 'Failed at' if tr('Compilation en cours') == 'Building' else 'Échec à'
+        result = f'{tr(message)} — 100 %' if success else f'{failure} {int(self.display_value)} % — {tr(message)}'
         self.canvas.itemconfigure(self.phase_text, text=result, fill='#a7f5d4' if success else '#ffe4df')
-        self.close_button.configure(state='normal', text='Terminé')
+        self.close_button.configure(state='normal', text=tr('Terminé'))
         if not success and self.on_report:
             self.canvas.itemconfigure(self.report_button_item, state='normal')
         self.window.attributes('-topmost', False)

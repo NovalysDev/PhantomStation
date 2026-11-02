@@ -21,7 +21,7 @@ from bibliotheque import register_game, discover_games
 from detection_doublons import find_duplicates
 from phantom_library_ui import LibraryView
 from phantom_compiler_game import GameInCompiler
-from phantom_ui import ctk, button, panel, HeroBanner, BG, SURFACE, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_HOVER
+from phantom_ui import ctk, button, panel, HeroBanner, tr, load_language, set_language, BG, SURFACE, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_HOVER
 from phantom_window_icon import set_process_identity, set_window_icon
 from phantom_report_ui import open_report_dialog
 from phantom_update_ui import start_update_check
@@ -30,7 +30,7 @@ from rapport_erreur import report_text, launch_report_text, save_report
 from emballer import package_game, _cue_files
 from installer_bios import install_phantom_bios
 from installer_intro import install_intro_hook
-from installer_play_button import install_play_button
+from installer_play_button import install_play_button, install_ps1_language
 from installer_disc_menu import install_disc_menu_fr
 from installer_disc_hotkey import install_disc_hotkey
 from installer_sbi_display import install_sbi_display
@@ -90,7 +90,7 @@ def accept_responsible_use(root):
 
     root.withdraw()
     dialog = tk.Toplevel(root)
-    dialog.title('PhantomStation — Utilisation responsable')
+    dialog.title(tr('PhantomStation — Utilisation responsable'))
     dialog.configure(bg=BG)
     width, height = 660, 455
     x = max(0, (dialog.winfo_screenwidth() - width) // 2)
@@ -102,12 +102,14 @@ def accept_responsible_use(root):
     outer.pack(fill='both', expand=True, padx=24, pady=20)
     ctk.CTkLabel(outer, text='PHANTOMSTATION  /  DEV BY NOVALYS', text_color='#71deea',
                  font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x')
-    ctk.CTkLabel(outer, text='Utilisation responsable', text_color=TEXT,
-                 font=('Segoe UI', 23, 'bold'), anchor='w').pack(fill='x', pady=(3, 12))
+    heading = ctk.CTkLabel(outer, text=tr('Utilisation responsable'), text_color=TEXT,
+                 font=('Segoe UI', 23, 'bold'), anchor='w')
+    heading.pack(fill='x', pady=(3, 12))
     card = panel(outer)
     card.pack(fill='both', expand=True)
-    ctk.CTkLabel(card, text=NOTICE_TEXT, text_color=TEXT, font=('Segoe UI', 12),
-                 anchor='nw', justify='left', wraplength=550).pack(fill='both', expand=True, padx=22, pady=20)
+    notice = ctk.CTkLabel(card, text=tr(NOTICE_TEXT), text_color=TEXT, font=('Segoe UI', 12),
+                 anchor='nw', justify='left', wraplength=550)
+    notice.pack(fill='both', expand=True, padx=22, pady=20)
     actions = ctk.CTkFrame(outer, fg_color='transparent')
     actions.pack(fill='x', pady=(14, 0))
     accepted = [False]
@@ -121,8 +123,8 @@ def accept_responsible_use(root):
                 json.dump({'version': NOTICE_VERSION}, stream)
             os.replace(temporary, NOTICE_FILE)
         except OSError:
-            messagebox.showerror('Enregistrement impossible',
-                                 'Impossible de mémoriser ton choix. Vérifie les droits du dossier PhantomStation.', parent=dialog)
+            messagebox.showerror(tr('Enregistrement impossible'),
+                                 tr('Impossible de mémoriser ton choix. Vérifie les droits du dossier PhantomStation.'), parent=dialog)
             return
         finally:
             if temporary is not None:
@@ -130,8 +132,23 @@ def accept_responsible_use(root):
         accepted[0] = True
         dialog.destroy()
 
-    button(actions, 'Quitter', dialog.destroy, width=130).pack(side='left')
-    button(actions, 'J’accepte et je continue', accept, primary=True, width=210).pack(side='right')
+    quit_button = button(actions, 'Quitter', dialog.destroy, width=110); quit_button.pack(side='left')
+    accept_button = button(actions, 'J’accepte et je continue', accept, primary=True, width=210); accept_button.pack(side='right')
+    choice = tk.StringVar(value=load_language().upper())
+    def change_notice_language(value):
+        try:
+            set_language(value.lower())
+        except OSError as exc:
+            choice.set(load_language().upper())
+            messagebox.showerror(tr('Impossible d’enregistrer la langue'), str(exc), parent=dialog)
+            return
+        dialog.title(tr('PhantomStation — Utilisation responsable'))
+        heading.configure(text=tr('Utilisation responsable'))
+        notice.configure(text=tr(NOTICE_TEXT))
+        quit_button.configure(text=tr('Quitter'))
+        accept_button.configure(text=tr('J’accepte et je continue'))
+    ctk.CTkSegmentedButton(actions, values=['FR','EN'], variable=choice, command=change_notice_language,
+                           width=100, selected_color=ACCENT).pack(side='left', padx=10)
     dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
     dialog.lift()
     dialog.focus_force()
@@ -177,7 +194,7 @@ def launch_game(exe, parent):
             env['PHANTOM_GAME_TITLE'] = exe.stem.replace('_', ' ')
         subprocess.Popen([str(exe)], cwd=str(exe.parent), env=env)
     except OSError as exc:
-        messagebox.showerror('Impossible de lancer le jeu', str(exc), parent=parent)
+        messagebox.showerror(tr('Impossible de lancer le jeu'), str(exc), parent=parent)
 
 
 def runtime_exe(project):
@@ -574,7 +591,7 @@ def cleanup_descriptors(records):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title('PhantomStation — Recompilation de jeux rétro')
+        root.title(tr('PhantomStation — Recompilation de jeux rétro'))
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         width, height = min(1220, max(980, sw - 60)), min(860, max(700, sh - 90))
         root.geometry(f'{width}x{height}+{max(0, (sw-width)//2)}+{max(0, (sh-height)//2)}')
@@ -606,20 +623,28 @@ class App:
         self.players_by_console = {'PS1': '1', 'PS2': '2', 'NES': '2', 'SNES': '2', 'N64': '4'}
         self.current_page = 'creation'
 
-        hero = HeroBanner(root)
-        hero.pack(fill='x')
+        self.hero = HeroBanner(root)
+        self.hero.pack(fill='x')
         shell = ctk.CTkFrame(root, fg_color=BG, corner_radius=0)
         shell.pack(fill='both', expand=True, padx=18, pady=(14, 16))
         sidebar = panel(shell, width=190)
         sidebar.pack(side='left', fill='y', padx=(0, 14))
         sidebar.pack_propagate(False)
-        ctk.CTkLabel(sidebar, text='TON ESPACE', text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x', padx=18, pady=(21, 10))
+        ctk.CTkLabel(sidebar, text=tr('TON ESPACE'), text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x', padx=18, pady=(21, 10))
         self.nav_buttons = {}
         for key, title in [('creation', '◈   Compilation'), ('library', '▦   Jeux'), ('guide', '?   Mode d’emploi')]:
             nav = button(sidebar, title, lambda k=key: self.select_navigation(k), width=152, anchor='w')
             nav.pack(fill='x', padx=12, pady=4)
             self.nav_buttons[key] = nav
         ctk.CTkLabel(sidebar, text='PLAYSTATION  /  NINTENDO', text_color='#6d829b', font=('Segoe UI', 9, 'bold'), anchor='w').pack(side='bottom', fill='x', padx=19, pady=(0, 20))
+        language_area = ctk.CTkFrame(sidebar, fg_color='transparent')
+        language_area.pack(side='bottom', fill='x', padx=13, pady=(0, 14))
+        ctk.CTkLabel(language_area, text='LANGUE / LANGUAGE', text_color='#6d829b', font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x', pady=(0, 4))
+        self.language_choice = tk.StringVar(value=load_language().upper())
+        self.language_switch = ctk.CTkSegmentedButton(language_area, values=['FR', 'EN'], variable=self.language_choice,
+            command=self.change_language, selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
+            unselected_color='#20334b', unselected_hover_color='#31516b')
+        self.language_switch.pack(fill='x')
 
         self.content = ctk.CTkFrame(shell, fg_color='transparent')
         self.content.pack(side='left', fill='both', expand=True)
@@ -639,9 +664,9 @@ class App:
             command=self.change_console, selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
             unselected_color='#20334b', unselected_hover_color='#31516b', width=260)
         self.console_switch.pack(pady=(3, 0))
-        ctk.CTkLabel(title, text='ATELIER PHANTOMSTATION', text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w', height=17).pack(fill='x')
-        ctk.CTkLabel(title, text='Créer un jeu', text_color=TEXT, font=('Segoe UI', 24, 'bold'), anchor='w', height=30).pack(fill='x')
-        ctk.CTkLabel(title, text='Choisis tes disques et prépare ton jeu en quelques étapes.', text_color=MUTED, font=('Segoe UI', 11), anchor='w', height=19).pack(fill='x')
+        ctk.CTkLabel(title, text=tr('ATELIER PHANTOMSTATION'), text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w', height=17).pack(fill='x')
+        ctk.CTkLabel(title, text=tr('Créer un jeu'), text_color=TEXT, font=('Segoe UI', 24, 'bold'), anchor='w', height=30).pack(fill='x')
+        ctk.CTkLabel(title, text=tr('Choisis tes disques et prépare ton jeu en quelques étapes.'), text_color=MUTED, font=('Segoe UI', 11), anchor='w', height=19).pack(fill='x')
 
         panels = ctk.CTkFrame(creation, fg_color='transparent')
         panels.pack(fill='x', pady=(0, 10))
@@ -653,13 +678,13 @@ class App:
         right.grid(row=0, column=1, sticky='nsew', padx=(6, 0))
         l = ctk.CTkFrame(left, fg_color='transparent'); l.pack(fill='both', expand=True, padx=17, pady=10)
         r = ctk.CTkFrame(right, fg_color='transparent'); r.pack(fill='both', expand=True, padx=17, pady=10)
-        ctk.CTkLabel(l, text='01   TON JEU', text_color='#73ddeb', font=('Segoe UI', 10, 'bold'), anchor='w', height=19).pack(fill='x')
-        ctk.CTkLabel(l, text='Nom du jeu', text_color=TEXT, font=('Segoe UI', 12, 'bold'), anchor='w', height=20).pack(fill='x', pady=(7, 2))
+        ctk.CTkLabel(l, text=tr('01   TON JEU'), text_color='#73ddeb', font=('Segoe UI', 10, 'bold'), anchor='w', height=19).pack(fill='x')
+        ctk.CTkLabel(l, text=tr('Nom du jeu'), text_color=TEXT, font=('Segoe UI', 12, 'bold'), anchor='w', height=20).pack(fill='x', pady=(7, 2))
         self.name = tk.StringVar(value=''); self.suggested_name = ''
         ctk.CTkEntry(l, textvariable=self.name, height=37, corner_radius=10, fg_color='#0b1727', border_color=BORDER, text_color=TEXT).pack(fill='x', pady=(0, 8))
         self.choose = button(l, '＋  Ajouter un ou plusieurs disques', self.select)
         self.choose.pack(fill='x')
-        self.disc_text = tk.StringVar(value='Aucun disque sélectionné.')
+        self.disc_text = tk.StringVar(value=tr('Aucun disque sélectionné.'))
         ctk.CTkLabel(l, textvariable=self.disc_text, text_color=MUTED, font=('Segoe UI', 10), anchor='w', justify='left', wraplength=350, height=19).pack(fill='x', pady=(4, 4))
         disc_actions = ctk.CTkFrame(l, fg_color='transparent'); disc_actions.pack(fill='x', pady=(0, 3))
         self.disc_remove = button(disc_actions, 'Retirer le dernier', self.remove_last_disc, width=130)
@@ -667,32 +692,32 @@ class App:
         self.disc_clear = button(disc_actions, 'Tout retirer', self.clear_discs, width=100)
         self.disc_clear.pack(side='left', fill='x', expand=True, padx=(7, 0))
         self.disc_remove.configure(state='disabled'); self.disc_clear.configure(state='disabled')
-        self.disc_help = tk.StringVar(value=DISC_FORMAT_HELP['PS1'])
+        self.disc_help = tk.StringVar(value=tr(DISC_FORMAT_HELP['PS1']))
         ctk.CTkLabel(l, textvariable=self.disc_help, text_color=MUTED, font=('Segoe UI', 10), anchor='w', justify='left', wraplength=350, height=19).pack(fill='x', pady=(5, 0))
 
-        ctk.CTkLabel(r, text='02   OPTIONS DE CRÉATION', text_color='#73ddeb', font=('Segoe UI', 10, 'bold'), anchor='w', height=19).pack(fill='x')
+        ctk.CTkLabel(r, text=tr('02   OPTIONS DE CRÉATION'), text_color='#73ddeb', font=('Segoe UI', 10, 'bold'), anchor='w', height=19).pack(fill='x')
         options = ctk.CTkFrame(r, fg_color='transparent'); options.pack(fill='x', pady=(9, 7))
         self.players = tk.StringVar(value='1'); self.resolution = tk.StringVar(value='8x')
-        ctk.CTkLabel(options, text='Joueurs', text_color=TEXT, font=('Segoe UI', 11)).pack(side='left')
+        ctk.CTkLabel(options, text=tr('Joueurs'), text_color=TEXT, font=('Segoe UI', 11)).pack(side='left')
         self.players_box = ctk.CTkComboBox(options, variable=self.players, values=['1','2','3','4'], state='readonly', width=68, height=34, corner_radius=10, fg_color=CARD, border_color=BORDER, button_color='#28536d'); self.players_box.pack(side='left', padx=(6, 12))
-        ctk.CTkLabel(options, text='Résolution', text_color=TEXT, font=('Segoe UI', 11)).pack(side='left')
+        ctk.CTkLabel(options, text=tr('Résolution'), text_color=TEXT, font=('Segoe UI', 11)).pack(side='left')
         self.resolution_box = ctk.CTkComboBox(options, variable=self.resolution, values=['1x','2x','4x','8x','auto'], state='readonly', width=85, height=34, corner_radius=10, fg_color=CARD, border_color=BORDER, button_color='#28536d'); self.resolution_box.pack(side='left', padx=(6, 0))
         self.phantom_bios = tk.BooleanVar(value=True)
-        self.bios_box = ctk.CTkCheckBox(r, text='BIOS PhantomStation (expérimental)', variable=self.phantom_bios, text_color=TEXT, font=('Segoe UI', 11), corner_radius=5, fg_color=ACCENT, hover_color=ACCENT_HOVER); self.bios_box.pack(anchor='w', pady=(0, 7))
+        self.bios_box = ctk.CTkCheckBox(r, text=tr('BIOS PhantomStation (expérimental)'), variable=self.phantom_bios, text_color=TEXT, font=('Segoe UI', 11), corner_radius=5, fg_color=ACCENT, hover_color=ACCENT_HOVER); self.bios_box.pack(anchor='w', pady=(0, 7))
         self.options_hint = tk.StringVar(value='')
         ctk.CTkLabel(r, textvariable=self.options_hint, text_color=MUTED, font=('Segoe UI', 10), anchor='w', justify='left', wraplength=330).pack(fill='x', pady=(0, 4))
         destination = ctk.CTkFrame(r, fg_color='transparent'); destination.pack(fill='x')
         self.output_button = button(destination, 'Dossier des jeux', self.select_output_directory, width=140)
         self.output_button.pack(side='left', fill='x', expand=True)
         button(destination, 'Ouvrir', self.open_packages, width=70).pack(side='left', padx=(7, 0))
-        self.output_text = tk.StringVar(value='Dossier : ' + str(self.output_dir))
+        self.output_text = tk.StringVar(value=tr('Dossier : ') + str(self.output_dir))
         ctk.CTkLabel(r, textvariable=self.output_text, text_color=MUTED, font=('Segoe UI', 10), anchor='w', wraplength=350, justify='left', height=19).pack(fill='x', pady=(4, 4))
         artwork = ctk.CTkFrame(r, fg_color='transparent'); artwork.pack(fill='x')
         self.icon_button = button(artwork, 'Choisir la jaquette', self.select_icon, width=120)
         self.icon_button.pack(side='left', fill='x', expand=True)
         self.background_button = button(artwork, 'Choisir le fond', self.select_background, width=110)
         self.background_button.pack(side='left', fill='x', expand=True, padx=(7, 0))
-        self.icon_text = tk.StringVar(value='Jaquette automatique si disponible')
+        self.icon_text = tk.StringVar(value=tr('Jaquette automatique si disponible'))
         ctk.CTkLabel(r, textvariable=self.icon_text, text_color=MUTED, font=('Segoe UI', 10), anchor='w', wraplength=350, height=19).pack(fill='x', pady=(4, 0))
 
         actions = ctk.CTkFrame(creation, fg_color='transparent'); actions.pack(fill='x', pady=(0, 10))
@@ -703,17 +728,17 @@ class App:
         self.launch_button = button(actions, 'Lancer le programme', self.launch, width=145); self.launch_button.pack(side='left')
 
         footer = ctk.CTkFrame(creation, fg_color='transparent'); footer.pack(side='bottom', fill='x', pady=(8, 0))
-        self.status = tk.StringVar(value='En attente')
+        self.status = tk.StringVar(value=tr('En attente'))
         ctk.CTkLabel(footer, textvariable=self.status, text_color='#94c2cc', font=('Segoe UI', 10), anchor='w').pack(side='left', fill='x', expand=True)
         log_card = panel(creation); log_card.pack(fill='both', expand=True)
         log_header = ctk.CTkFrame(log_card, fg_color='transparent'); log_header.pack(fill='x', padx=16, pady=(10, 4))
-        ctk.CTkLabel(log_header, text='JOURNAL DE COMPILATION', text_color='#73ddeb', font=('Segoe UI', 10, 'bold'), anchor='w').pack(side='left')
-        ctk.CTkLabel(log_header, text='Suivi et détails', text_color=MUTED, font=('Segoe UI', 10)).pack(side='right')
+        ctk.CTkLabel(log_header, text=tr('JOURNAL DE COMPILATION'), text_color='#73ddeb', font=('Segoe UI', 10, 'bold'), anchor='w').pack(side='left')
+        ctk.CTkLabel(log_header, text=tr('Suivi et détails'), text_color=MUTED, font=('Segoe UI', 10)).pack(side='right')
         self.report_shortcut = button(log_header, 'Envoyer le rapport', self.show_error_report, width=150)
         self.log = tk.Text(log_card, height=5, wrap='word', state='disabled', bg='#0c192a', fg='#d8eaff', insertbackground='white', relief='flat', highlightthickness=0, padx=10, pady=8, font=('Consolas', 9))
         self.log.pack(fill='both', expand=True, padx=15, pady=(0, 12))
-        ctk.CTkLabel(guide, text='BIENVENUE', text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x')
-        ctk.CTkLabel(guide, text='Mode d’emploi', text_color=TEXT, font=('Segoe UI', 25, 'bold'), anchor='w').pack(fill='x', pady=(0, 12))
+        ctk.CTkLabel(guide, text=tr('BIENVENUE'), text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x')
+        ctk.CTkLabel(guide, text=tr('Mode d’emploi'), text_color=TEXT, font=('Segoe UI', 25, 'bold'), anchor='w').pack(fill='x', pady=(0, 12))
         guide_card = panel(guide); guide_card.pack(fill='both', expand=True)
         guide_body = tk.Text(guide_card, wrap='word', bg=SURFACE, fg='#dae8f7', relief='flat', highlightthickness=0, font=('Segoe UI', 11), padx=20, pady=18)
         guide_scroll = ctk.CTkScrollbar(guide_card, command=guide_body.yview)
@@ -775,7 +800,9 @@ UTILISATION RESPONSABLE
 MISES À JOUR
 
 Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle est disponible, il la télécharge, l’installe et redémarre. Les jeux, les projets, les sauvegardes et les réglages sont conservés. Sans connexion, le compilateur reste utilisable.''')
-        guide_body.configure(state='disabled')
+        self.guide_body = guide_body
+        self.guide_fr = guide_body.get('1.0', 'end-1c')
+        self.update_guide()
 
         self.show_page('creation')
         exemple = BASE / 'bios-phantom-test' / 'essai-jeu'
@@ -787,6 +814,84 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
 
     def select_navigation(self, key):
         self.show_page(key)
+
+    def update_guide(self):
+        english = '''GAME FORMATS
+
+PS1: choose a .cue file with all its .bin tracks in the same folder, or select an .iso image. Add one image per disc in order for multi-disc games. When a disc has several BIN tracks, select its CUE file.
+
+PS2: select one .iso image. BIN/CUE images are not supported for PS2. Large discs are compressed when needed; games that still exceed 4 GiB must be opened from the PhantomStation library.
+
+NES: select a .nes cartridge. Super Nintendo: select a .sfc or .smc cartridge. Nintendo 64: select a .z64, .v64 or .n64 cartridge. Compatibility depends on the game and region; these engines are experimental.
+
+Extract .7z archives first. CHD files are not currently supported.
+
+1. Select a console and add the game image or disc files. The suggested game name can be edited. Choose the number of players supported by the game and console.
+
+2. Choose a cover and background, or let PhantomStation look for a cover. Choose the destination folder for your games, then click Create program.
+
+3. Wait for the build to finish. You can create a desktop shortcut and choose whether to move the original images to the Recycle Bin. Test the game before deleting your originals.
+
+The library groups games by console and lets you launch or rename them, manage saves and restore backups. A backup of changed saves is made before launching from the library.
+
+For PS1 games needing an SBI file, PhantomStation searches automatically. If none is found, the game is created and a warning explains how to add it in the game launcher.
+
+Connect a compatible controller: PhantomStation will propose it for player 1. Controls and game-specific settings can be changed in the launcher or in the game. NES/SNES use F2 for settings and controls, F3 for filters, and F8/F9 for quick saves. N64 uses F10 for settings and controls. PS2 supports two controller ports.
+
+The single game file includes its disc. On first launch its contents are extracted to the local PhantomStation folder and require additional space. Saves are stored under Documents/PhantomStation/Sauvegardes. Updates preserve games, saves and settings.
+
+The selected interface language does not translate the game itself: the game language depends on its disc or cartridge version. Only use game and BIOS files you are authorized to use.'''
+        self.guide_body.configure(state='normal')
+        self.guide_body.delete('1.0', 'end')
+        self.guide_body.insert('1.0', english if load_language() == 'en' else self.guide_fr)
+        self.guide_body.configure(state='disabled')
+
+    def change_language(self, choice):
+        language = choice.lower()
+        if language not in ('fr', 'en') or language == load_language():
+            return
+        if self.busy:
+            self.language_choice.set(load_language().upper())
+            messagebox.showinfo(tr('Changer de langue'), tr('La langue ne peut pas être changée pendant une compilation.'), parent=self.root)
+            return
+        try:
+            set_language(language)
+        except OSError as exc:
+            self.language_choice.set(load_language().upper())
+            messagebox.showerror(tr('Impossible d’enregistrer la langue'), str(exc), parent=self.root)
+            return
+        self.retranslate_widgets(self.root)
+        self.root.title(tr(self.root.title()))
+        self.disc_help.set(tr(DISC_FORMAT_HELP.get(self.console.get(), DISC_FORMAT_HELP['PS1'])))
+        self.output_text.set(tr('Dossier : ') + str(self.output_dir))
+        self.refresh_discs()
+        self.options_hint.set(tr('Nombre maximal de manettes ; le jeu choisit son mode multijoueur.') if self.console.get() != 'PS1' else '')
+        self.update_guide()
+        self.library.set_platform(self.library.platform)
+        self.hero.redraw(None)
+
+    def retranslate_widgets(self, parent):
+        # Only labels and buttons are changed: entry contents and game names stay intact.
+        classes = (ctk.CTkLabel, ctk.CTkButton, ctk.CTkCheckBox)
+        for child in parent.winfo_children():
+            if isinstance(child, classes):
+                if getattr(child, '_phantom_no_translate', False):
+                    continue
+                try:
+                    variable = child.cget('textvariable')
+                except (AttributeError, ValueError, tk.TclError):
+                    variable = None
+                if variable:
+                    try:
+                        name = str(variable)
+                        self.root.setvar(name, tr(self.root.getvar(name)))
+                    except tk.TclError:
+                        pass
+                else:
+                    try: child.configure(text=tr(child.cget('text')))
+                    except (AttributeError, ValueError, tk.TclError): pass
+            else:
+                self.retranslate_widgets(child)
 
     def update_navigation(self):
         selected = self.current_page
@@ -813,18 +918,18 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             self.name.set(name)
             self.console_active = value
             self.players.set(self.players_by_console.get(value, '—'))
-            self.icon_text.set('Jaquette automatique si disponible' if not self.icon_path else 'Image choisie : ' + Path(self.icon_path).name)
+            self.icon_text.set(tr('Jaquette automatique si disponible') if not self.icon_path else tr('Image choisie : ') + Path(self.icon_path).name)
             self.refresh_discs()
         is_ps1 = value == 'PS1'
         limit = 5 if value == 'SNES' else 4 if value in ('PS1', 'N64') else 2
         self.players_box.configure(values=[str(n) for n in range(1, limit + 1)])
-        self.disc_help.set(DISC_FORMAT_HELP.get(value, DISC_FORMAT_HELP['PS1']))
+        self.disc_help.set(tr(DISC_FORMAT_HELP.get(value, DISC_FORMAT_HELP['PS1'])))
         self.players_box.configure(state='readonly')
         self.resolution_box.configure(state='readonly' if is_ps1 else 'disabled')
         self.bios_box.configure(state='normal' if is_ps1 else 'disabled')
-        self.options_hint.set('Nombre maximal de manettes ; le jeu choisit son mode multijoueur.' if value != 'PS1' else '')
+        self.options_hint.set(tr('Nombre maximal de manettes ; le jeu choisit son mode multijoueur.') if value != 'PS1' else '')
         if update_status:
-            self.status.set('PS1 sélectionnée.' if is_ps1 else value + ' expérimental : réglages disponibles selon le jeu.')
+            self.status.set(tr('PS1 sélectionnée.') if is_ps1 else value + tr(' expérimental : réglages disponibles selon le jeu.'))
         self.update_navigation()
 
     def select(self):
@@ -844,7 +949,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                 if not self.switch_detected_ps2():
                     return
             elif detected == 'PS1' and self.console.get() == 'PS2':
-                messagebox.showwarning('Jeu PS1 détecté', 'Cette image est un jeu PS1. Sélectionne PS1 pour l’ajouter.')
+                messagebox.showwarning(tr('Jeu PS1 détecté'), tr('Cette image est un jeu PS1. Sélectionne PS1 pour l’ajouter.'))
                 return
         known = {disc_selection_key(path) for path in self.discs}
         new = []
@@ -854,7 +959,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                 new.append(path)
                 known.add(key)
         if not new:
-            self.status.set('Ces disques sont déjà dans la sélection.')
+            self.status.set(tr('Ces disques sont déjà dans la sélection.'))
             return
         if not self.discs:
             previous_name = self.name.get().strip()
@@ -868,8 +973,8 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
     def switch_detected_ps2(self):
         draft = self.console_drafts.get('PS2')
         if draft and (draft[0] or draft[1] or draft[3] or draft[4]):
-            messagebox.showwarning('Jeu PS2 détecté',
-                'Cette image est un jeu PS2. Sélectionne PS2 : une sélection PS2 existe déjà et a été conservée.')
+            messagebox.showwarning(tr('Jeu PS2 détecté'),
+                tr('Cette image est un jeu PS2. Sélectionne PS2 : une sélection PS2 existe déjà et a été conservée.'))
             return False
         # The current selection belongs to PS2; keep its title and artwork.
         self.players_by_console[self.console_active] = self.players.get()
@@ -877,13 +982,13 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         self.console_active = 'PS2'
         self.players.set(self.players_by_console['PS2'])
         self.change_console('PS2', update_status=False)
-        self.status.set('Jeu PS2 détecté : console PS2 sélectionnée automatiquement.')
+        self.status.set(tr('Jeu PS2 détecté : console PS2 sélectionnée automatiquement.'))
         return True
 
     def refresh_discs(self):
-        label = 'Cartouche' if self.console.get() in ('NES', 'SNES', 'N64') else 'CD'
+        label = ('Cartridge' if load_language() == 'en' else 'Cartouche') if self.console.get() in ('NES', 'SNES', 'N64') else 'CD'
         self.disc_text.set('\n'.join(f'{label} {i + 1} : {Path(p).name}' for i, p in enumerate(self.discs))
-                           if self.discs else 'Aucun disque sélectionné.')
+                           if self.discs else tr('Aucun disque sélectionné.'))
         state = 'normal' if self.discs and not self.busy else 'disabled'
         self.disc_remove.configure(state=state)
         self.disc_clear.configure(state=state)
@@ -906,10 +1011,10 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         self.refresh_discs()
 
     def select_icon(self):
-        selected = filedialog.askopenfilename(title='Choisir une jaquette ou image', filetypes=[('Images', '*.png *.jpg *.jpeg *.webp *.ico'), ('Tous les fichiers', '*.*')])
+        selected = filedialog.askopenfilename(title=tr('Choisir une jaquette ou image'), filetypes=[('Images', '*.png *.jpg *.jpeg *.webp *.ico'), (tr('Tous les fichiers'), '*.*')])
         if selected:
             self.icon_path = selected
-            self.icon_text.set('Image choisie : ' + Path(selected).name)
+            self.icon_text.set(tr('Image choisie : ') + Path(selected).name)
 
     def append(self, text):
         self.log.configure(state='normal')
@@ -946,7 +1051,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                         self.report_shortcut.pack(side='right', padx=(0, 8))
                     self.finished_game = Path(game) if success and game else None
                     self.finished_images = (images, game_identity) if success else ([], None)
-                    self.status.set(message)
+                    self.status.set(tr(message))
                     if self.progress_window:
                         self.progress_window.complete(success, message)
                     else:
@@ -964,7 +1069,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         if attempt:
             for line in cleanup_failed_attempt(attempt):
                 self.append(line + '\n')
-            self.status.set('Échec de la compilation — détails dans le journal.')
+            self.status.set(tr('Échec de la compilation — détails dans le journal.'))
         for button in (self.start, self.choose, self.launch_button, self.project_button,
                        self.output_button, self.icon_button, self.background_button):
             button.configure(state='normal')
@@ -974,22 +1079,22 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         game, self.finished_game = self.finished_game, None
         missing, self.finished_missing_sbi = self.finished_missing_sbi, []
         if game and missing:
-            messagebox.showwarning('Fichier SBI manquant',
-                'Le jeu a été créé, mais un fichier SBI nécessaire n’a pas été trouvé pour :\n\n'
+            messagebox.showwarning(tr('Fichier SBI manquant'),
+                tr('Le jeu a été créé, mais un fichier SBI nécessaire n’a pas été trouvé pour :\n\n')
                 + '\n'.join('• ' + item for item in missing)
-                + '\n\nDans le lanceur du jeu, utilise « Ajouter le fichier SBI » pour sélectionner le fichier correspondant.', parent=self.root)
+                + tr('\n\nDans le lanceur du jeu, utilise « Ajouter le fichier SBI » pour sélectionner le fichier correspondant.'), parent=self.root)
         if game:
             self.library.refresh()
         images, game_identity = self.finished_images
         self.finished_images = ([], None)
         self.finished_missing_sbi = []
-        if game and messagebox.askyesno('Raccourci sur le bureau',
-                                       f'Veux-tu créer un raccourci pour « {game.stem} » sur ton bureau ?', parent=self.root):
+        if game and messagebox.askyesno(tr('Raccourci sur le bureau'),
+                                       (f'Create a desktop shortcut for “{game.stem}”?' if load_language() == 'en' else f'Veux-tu créer un raccourci pour « {game.stem} » sur ton bureau ?'), parent=self.root):
             try:
                 link = create_desktop_shortcut(game)
-                self.status.set('Raccourci créé sur le bureau : ' + link.name)
+                self.status.set(tr('Raccourci créé sur le bureau : ') + link.name)
             except OSError as exc:
-                messagebox.showerror('Raccourci impossible', str(exc), parent=self.root)
+                messagebox.showerror(tr('Raccourci impossible'), str(exc), parent=self.root)
         if game and images:
             self.offer_image_cleanup(game, game_identity, images)
 
@@ -1013,9 +1118,9 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                     skipped.append(str(folder))
                     continue
                 listing = '\n'.join('• ' + str(record[0]) for record in records)
-                question = ('Le dossier contient peut-être d’autres fichiers. Veux-tu déplacer uniquement ces fichiers d’origine dans la Corbeille ?\n\n'
-                            + listing + '\n\nLe fonctionnement du jeu doit encore être testé. Tu peux répondre Non pour les garder.')
-                if not messagebox.askyesno('Fichiers du jeu d’origine', question, parent=self.root, default='no'):
+                question = (tr('Le dossier contient peut-être d’autres fichiers. Veux-tu déplacer uniquement ces fichiers d’origine dans la Corbeille ?\n\n')
+                            + listing + tr('\n\nLe fonctionnement du jeu doit encore être testé. Tu peux répondre Non pour les garder.'))
+                if not messagebox.askyesno(tr('Fichiers du jeu d’origine'), question, parent=self.root, default='no'):
                     continue
                 try:
                     stat = game.stat()
@@ -1025,15 +1130,15 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                         if not original_files_unchanged([record], file_protected):
                             raise OSError('Un fichier a changé pendant le déplacement. Certains fichiers ont peut-être déjà été déplacés dans la Corbeille.')
                         recycle_original_file(record[0])
-                    self.status.set('Fichiers d’origine déplacés dans la Corbeille.')
+                    self.status.set(tr('Fichiers d’origine déplacés dans la Corbeille.'))
                 except OSError as exc:
-                    messagebox.showerror('Déplacement interrompu', str(exc) + '\nVérifie les fichiers déjà présents dans la Corbeille.', parent=self.root)
+                    messagebox.showerror(tr('Déplacement interrompu'), str(exc) + tr('\nVérifie les fichiers déjà présents dans la Corbeille.'), parent=self.root)
                 continue
             listing = '\n'.join('• ' + name + ('/' if is_dir else '') for name, is_dir, *_ in contents)
-            question = ('Le jeu a été créé et son fichier vérifié. Veux-tu déplacer ce dossier et tout son contenu dans la Corbeille ?\n\n'
+            question = (tr('Le jeu a été créé et son fichier vérifié. Veux-tu déplacer ce dossier et tout son contenu dans la Corbeille ?\n\n')
                         + str(folder) + '\n\n' + listing
-                        + '\n\nLe fonctionnement du jeu doit encore être testé. Tu peux répondre Non pour garder les originaux.')
-            if not messagebox.askyesno('Images du jeu d’origine', question, parent=self.root, default='no'):
+                        + tr('\n\nLe fonctionnement du jeu doit encore être testé. Tu peux répondre Non pour garder les originaux.'))
+            if not messagebox.askyesno(tr('Images du jeu d’origine'), question, parent=self.root, default='no'):
                 continue
             try:
                 stat = game.stat()
@@ -1042,12 +1147,12 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                 if image_folder_contents(folder, records, protected) != contents:
                     raise OSError('Le contenu ou le chemin du dossier a changé ; il a été conservé.')
                 recycle_image_folder(folder)
-                self.status.set('Images d’origine déplacées dans la Corbeille : ' + str(folder))
+                self.status.set(tr('Images d’origine déplacées dans la Corbeille : ') + str(folder))
             except OSError as exc:
-                messagebox.showerror('Dossier conservé', str(exc), parent=self.root)
+                messagebox.showerror(tr('Dossier conservé'), str(exc), parent=self.root)
         if skipped:
-            messagebox.showinfo('Dossier conservé',
-                'Ces dossiers ont été conservés : leur contenu a changé, ils contiennent des sauvegardes ou des liens, sont trop volumineux à afficher ou correspondent à un emplacement partagé :\n\n' + '\n'.join(skipped), parent=self.root)
+            messagebox.showinfo(tr('Dossier conservé'),
+                tr('Ces dossiers ont été conservés : leur contenu a changé, ils contiennent des sauvegardes ou des liens, sont trop volumineux à afficher ou correspondent à un emplacement partagé :\n\n') + '\n'.join(skipped), parent=self.root)
 
     def show_progress(self, message):
         self.finished_game = None
@@ -1095,10 +1200,10 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         os.startfile(str(target))
 
     def select_background(self):
-        selected = filedialog.askopenfilename(title='Choisir une image de fond pour le jeu', filetypes=[('Images', '*.png *.jpg *.jpeg *.webp'), ('Tous les fichiers', '*.*')])
+        selected = filedialog.askopenfilename(title=tr('Choisir une image de fond pour le jeu'), filetypes=[('Images', '*.png *.jpg *.jpeg *.webp'), ('Tous les fichiers', '*.*')])
         if selected:
             self.background_path = selected
-            self.icon_text.set('Fond choisi : ' + Path(selected).name)
+            self.icon_text.set(tr('Fond choisi : ') + Path(selected).name)
 
     def launch(self):
         last = self.last_output_by_console.get(self.console.get())
@@ -1107,7 +1212,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             return
         exe = runtime_exe(self.project) if self.project else None
         if not exe:
-            messagebox.showinfo('Programme indisponible', 'Ouvre le fichier EXE dans le dossier des jeux. Les fichiers de compilation peuvent avoir été nettoyés après sa création.')
+            messagebox.showinfo(tr('Programme indisponible'), tr('Ouvre le fichier EXE dans le dossier des jeux. Les fichiers de compilation peuvent avoir été nettoyés après sa création.'))
             return
         env = os.environ.copy()
         env['PHANTOM_SPLASH_EXE'] = str(BASE / 'unique_stub.exe')
@@ -1126,39 +1231,39 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             try:
                 failure['path'] = save_report(failure['text'])
                 detail = '\n\nRapport enregistré : ' + str(failure['path']) + '\n\nVoir ou envoyer le rapport ?'
-                if messagebox.askyesno('Impossible de lancer le jeu', str(exc) + detail, parent=self.root):
+                if messagebox.askyesno(tr('Impossible de lancer le jeu'), str(exc) + detail, parent=self.root):
                     open_report_dialog(self.root, failure)
             except OSError as report_error:
-                messagebox.showerror('Impossible de lancer le jeu', str(exc) + '\n\nRapport non enregistré : ' + str(report_error), parent=self.root)
+                messagebox.showerror(tr('Impossible de lancer le jeu'), str(exc) + '\n\nRapport non enregistré : ' + str(report_error), parent=self.root)
 
     def select_project(self):
-        folder = filedialog.askdirectory(title='Choisir un projet déjà créé', initialdir=str(PROJECTS))
+        folder = filedialog.askdirectory(title=tr('Choisir un projet déjà créé'), initialdir=str(PROJECTS))
         if folder:
             self.project = Path(folder)
             self.icon_path = None
             self.background_path = None
-            self.icon_text.set('Icône du projet ou jaquette automatique')
-            self.status.set('Projet sélectionné : ' + self.project.name)
+            self.icon_text.set(tr('Icône du projet ou jaquette automatique'))
+            self.status.set(tr('Projet sélectionné : ') + self.project.name)
 
     def select_output_directory(self):
         initial = self.output_dir if self.output_dir.is_dir() else BASE
-        folder = filedialog.askdirectory(title='Choisir le dossier des jeux compilés', initialdir=str(initial), mustexist=True)
+        folder = filedialog.askdirectory(title=tr('Choisir le dossier des jeux compilés'), initialdir=str(initial), mustexist=True)
         if not folder:
             return
         self.output_dir = Path(folder).resolve()
-        self.output_text.set('Dossier des jeux : ' + str(self.output_dir))
+        self.output_text.set(tr('Dossier des jeux : ') + str(self.output_dir))
         self.library.refresh()
         try:
             save_output_directory(self.output_dir)
         except OSError as exc:
-            messagebox.showwarning('Dossier non mémorisé', 'Le dossier est utilisé pour cette session, mais n’a pas pu être mémorisé :\n' + str(exc))
+            messagebox.showwarning(tr('Dossier non mémorisé'), 'Le dossier est utilisé pour cette session, mais n’a pas pu être mémorisé :\n' + str(exc))
 
     def open_packages(self):
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             os.startfile(str(self.output_dir))
         except OSError as exc:
-            messagebox.showerror('Dossier inaccessible', str(exc))
+            messagebox.showerror(tr('Dossier inaccessible'), str(exc))
 
     def confirm_existing_game(self, console, name):
         games = discover_games(self.output_dir, include_cover=False)
@@ -1167,15 +1272,15 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             return True
         lines = []
         for game, reason in matches[:5]:
-            description = 'image probablement identique' if reason == 'source' else 'nom similaire'
+            description = ('probably the same image' if reason == 'source' else 'similar name') if load_language() == 'en' else ('image probablement identique' if reason == 'source' else 'nom similaire')
             lines.append('• ' + game['name'] + ' — ' + description + '\n  ' + str(game['path']))
         if len(matches) > 5:
-            lines.append('… et ' + str(len(matches) - 5) + ' autre(s) jeu(x).')
+            lines.append(('… and ' + str(len(matches) - 5) + ' other game(s).') if load_language() == 'en' else ('… et ' + str(len(matches) - 5) + ' autre(s) jeu(x).'))
         return messagebox.askyesno(
-            'Jeu déjà présent',
-            'Un jeu qui pourrait déjà correspondre existe dans ta bibliothèque :\n\n' +
+            tr('Jeu déjà présent'),
+            tr('Un jeu qui pourrait déjà correspondre existe dans ta bibliothèque :\n\n') +
             '\n'.join(lines) +
-            '\n\nVérifie la version et la console. Veux-tu quand même créer un autre fichier ?',
+            tr('\n\nVérifie la version et la console. Veux-tu quand même créer un autre fichier ?'),
             parent=self.root, default=messagebox.NO)
 
     def build(self):
@@ -1190,14 +1295,14 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             self.start_nintendo_build()
             return
         if not self.discs:
-            messagebox.showwarning('Disques', 'Sélectionne au moins un disque.')
+            messagebox.showwarning(tr('Disques'), tr('Sélectionne au moins un disque.'))
             return
         if not SETUP.is_file() or not (TOOLCHAIN / 'bin' / 'cmake.exe').exists():
-            messagebox.showerror('Outils manquants', 'Le dossier PSXRecomp ou le compilateur est manquant.')
+            messagebox.showerror(tr('Outils manquants'), tr('Le dossier PSXRecomp ou le compilateur est manquant.'))
             return
         name = self.name.get().strip()
         if not name:
-            messagebox.showwarning('Nom', 'Indique le nom du jeu.')
+            messagebox.showwarning(tr('Nom'), tr('Indique le nom du jeu.'))
             return
         if not self.confirm_existing_game('PS1', name):
             return
@@ -1206,7 +1311,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             with tempfile.TemporaryFile(dir=self.output_dir):
                 pass
         except OSError as exc:
-            messagebox.showerror('Dossier inaccessible', 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
+            messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
             return
         slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:45] or 'jeu-ps1'
         PROJECTS.mkdir(parents=True, exist_ok=True)
@@ -1229,25 +1334,25 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         self.icon_button.configure(state='disabled')
         self.background_button.configure(state='disabled')
         self.console_switch.configure(state='disabled')
-        self.status.set('Compilation en cours…')
+        self.status.set(tr('Compilation en cours…'))
         self.show_progress('Préparation du projet…')
         threading.Thread(target=self.worker, args=(name, slug, list(self.discs), self.players.get(), self.resolution.get(), self.icon_path, self.phantom_bios.get(), self.background_path, self.output_dir), daemon=True).start()
 
     def start_ps2_build(self):
         if len(self.discs) != 1 or Path(self.discs[0]).suffix.lower() != '.iso':
-            messagebox.showwarning('Disque PS2', 'Sélectionne une seule image ISO PS2 pour ce jeu.')
+            messagebox.showwarning(tr('Disque PS2'), tr('Sélectionne une seule image ISO PS2 pour ce jeu.'))
             return
         name = self.name.get().strip()
         if not name:
-            messagebox.showwarning('Nom', 'Indique le nom du jeu.')
+            messagebox.showwarning(tr('Nom'), tr('Indique le nom du jeu.'))
             return
         if not self.confirm_existing_game('PS2', name):
             return
         ps2_sound = BASE / 'assets/son-demarrage-ps2.wav'
         if not ps2_sound.is_file():
-            selected = filedialog.askopenfilename(title='Choisir le son de démarrage PS2', filetypes=[('Son WAV', '*.wav')])
+            selected = filedialog.askopenfilename(title=tr('Choisir le son de démarrage PS2'), filetypes=[('Son WAV', '*.wav')])
             if not selected:
-                messagebox.showinfo('Son PS2 requis', 'Sélectionne un son de démarrage PS2 au format WAV pour continuer.')
+                messagebox.showinfo(tr('Son PS2 requis'), tr('Sélectionne un son de démarrage PS2 au format WAV pour continuer.'))
                 return
             try:
                 source = Path(selected)
@@ -1260,13 +1365,13 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
                 with ps2_sound.open('xb') as dest:
                     dest.write(data)
             except (OSError, ValueError, EOFError, wave.Error) as exc:
-                messagebox.showerror('Son PS2 invalide', 'Impossible d’utiliser ce fichier WAV :\n' + str(exc))
+                messagebox.showerror(tr('Son PS2 invalide'), 'Impossible d’utiliser ce fichier WAV :\n' + str(exc))
                 return
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryFile(dir=self.output_dir): pass
         except OSError as exc:
-            messagebox.showerror('Dossier inaccessible', 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
+            messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
             return
         slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:45] or 'jeu-ps2'
         base_slug = slug; index = 2
@@ -1276,7 +1381,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         for control in (self.start, self.choose, self.disc_remove, self.disc_clear, self.launch_button,
                         self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch):
             control.configure(state='disabled')
-        self.status.set('Compilation PS2 en cours…')
+        self.status.set(tr('Compilation PS2 en cours…'))
         self.show_progress('Préparation du projet PS2…')
         threading.Thread(target=self.worker_ps2, args=(name, slug, self.discs[0], self.icon_path, self.output_dir, self.background_path, self.players.get()), daemon=True).start()
 
@@ -1284,11 +1389,11 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
         console = self.console.get()
         extensions = {'NES': {'.nes'}, 'SNES': {'.sfc', '.smc'}, 'N64': {'.z64', '.v64', '.n64'}}
         if len(self.discs) != 1 or Path(self.discs[0]).suffix.lower() not in extensions[console]:
-            messagebox.showwarning('Cartouche Nintendo', 'Sélectionne une seule cartouche au format indiqué pour cette console.')
+            messagebox.showwarning(tr('Cartouche Nintendo'), tr('Sélectionne une seule cartouche au format indiqué pour cette console.'))
             return
         name = self.name.get().strip()
         if not name:
-            messagebox.showwarning('Nom', 'Indique le nom du jeu.')
+            messagebox.showwarning(tr('Nom'), tr('Indique le nom du jeu.'))
             return
         if not self.confirm_existing_game(console, name):
             return
@@ -1296,7 +1401,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             self.output_dir.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryFile(dir=self.output_dir): pass
         except OSError as exc:
-            messagebox.showerror('Dossier inaccessible', 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
+            messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
             return
         self.busy = True
         for control in (self.start, self.choose, self.disc_remove, self.disc_clear, self.launch_button,
@@ -1485,6 +1590,7 @@ Au démarrage, PhantomStation recherche une nouvelle version signée. Si elle es
             if use_phantom_bios:
                 self.events.put(('log', 'Intégration du BIOS PhantomStation expérimental…\n'))
                 install_phantom_bios(self.project, env)
+            install_ps1_language(self.project)
             cmd = [str(PYTHON), str(self.project / 'psxrecomp' / 'psxrecomp_cli.py'), 'rebuild', '--config', 'game.toml', '--project-root', '.', '--build-dir', 'build-release', '--no-pgo']
             self.run_step(cmd, env, self.project, 'Compilation Windows')
             exe = runtime_exe(self.project)
@@ -1548,7 +1654,7 @@ if __name__ == '__main__':
             launch_game(exe, app)
             app.destroy()
         else:
-            messagebox.showerror('Programme indisponible', 'Impossible de retrouver le jeu recompilé.')
+            messagebox.showerror(tr('Programme indisponible'), tr('Impossible de retrouver le jeu recompilé.'))
             app.destroy()
     elif accept_responsible_use(app):
         compiler = App(app)

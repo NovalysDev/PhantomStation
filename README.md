@@ -2,7 +2,7 @@
 
 **An experimental Windows front end for building and launching retro games from your own disc images and cartridges.**
 
-PhantomStation brings several existing recompilation and native-port projects into one French-language interface. It can prepare a standalone Windows game package, manage a library, open per-game settings and keep save data outside the package. Its current focus includes European/PAL releases.
+PhantomStation brings several existing recompilation and native-port projects into one interface. It can prepare a standalone Windows game package, manage a library, open per-game settings and keep save data outside the package. Its current focus includes European/PAL releases.
 
 > **Experimental project:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The portable download is a test version, not a stable release.
 
@@ -27,7 +27,7 @@ The latest test build improves handling of special characters in build paths, au
 - Keep new games' saves under the user's Documents folder and offer backups of saves.
 - Present a console-themed intro when the player starts a game.
 
-The interface is currently **French**. Features and settings are not yet identical across consoles.
+The compiler has a **French / English** selector that remembers the user's choice. Newly created PS2 and Nintendo launchers use the same setting; the PS1 launcher includes translated PhantomStation controls. Some engine messages and existing game launchers may remain in their original language. This setting does not translate the game itself: its language depends on the disc or cartridge. Features and settings are not yet identical across consoles.
 
 ## Platforms and scope
 

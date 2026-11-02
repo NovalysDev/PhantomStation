@@ -34,7 +34,7 @@ class Ps2GameForm : Form {
         ClientSize = new Size(920, 590); MinimumSize = new Size(800, 540);
         StartPosition = FormStartPosition.CenterScreen; BackColor = Color.FromArgb(5, 13, 27);
         DoubleBuffered = true; Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        var title = new Label { Text = UniqueLauncher.PreparedGameTitle, ForeColor = Color.White,
+        var title = new Label { Text = UniqueLauncher.PreparedGameTitle, Tag = "PhantomKeepText", ForeColor = Color.White,
             Font = new Font("Segoe UI", 24, FontStyle.Bold), AutoSize = false, BackColor = Color.Transparent,
             Location = new Point(38, 42), Size = new Size(800, 48) };
         Controls.Add(title);
@@ -96,6 +96,7 @@ class Ps2GameForm : Form {
         session = new PhantomEmbeddedGame(this);
         scale.SelectedIndex = options.Get("scale") == "1" ? 0 : 1;
         fullscreen.Checked = options.Yes("fullscreen");
+        PhantomLanguage.Apply(this);
         scale.SelectedIndexChanged += delegate { SaveOptions(); }; fullscreen.CheckedChanged += delegate { SaveOptions(); };
     }
     protected override void OnPaintBackground(PaintEventArgs e) {
@@ -108,7 +109,7 @@ class Ps2GameForm : Form {
     void SaveOptions() {
         if (syncingOptions) return;
         try { options.Set("scale", scale.SelectedIndex == 0 ? "1" : "2"); options.Set("fullscreen", fullscreen.Checked); options.Save(); }
-        catch (IOException) { status.Text = "Réglages non enregistrés."; } catch (UnauthorizedAccessException) { status.Text = "Réglages non enregistrés."; }
+        catch (IOException) { status.Text = PhantomLanguage.English ? "Settings were not saved." : "Réglages non enregistrés."; } catch (UnauthorizedAccessException) { status.Text = PhantomLanguage.English ? "Settings were not saved." : "Réglages non enregistrés."; }
     }
     static string Quote(string path) { return "\"" + path.Replace("\"", "\\\"") + "\""; }
     void PrepareCard(string card) {
@@ -125,7 +126,7 @@ class Ps2GameForm : Form {
         } finally { if (File.Exists(temp)) File.Delete(temp); }
     }
     async void StartGame(object sender, EventArgs e) {
-        play.Enabled = false; scale.Enabled = false; fullscreen.Enabled = false; status.Text = "Lancement du jeu…";
+        play.Enabled = false; scale.Enabled = false; fullscreen.Enabled = false; status.Text = PhantomLanguage.English ? "Starting the game…" : "Lancement du jeu…";
         bool full = fullscreen.Checked; string res = scale.SelectedIndex == 0 ? "1" : "2";
         try {
             string card = Path.Combine(saves, "carte-memoire.ps2"), quick = Path.Combine(saves, "sauvegardes-rapides");
@@ -135,6 +136,7 @@ class Ps2GameForm : Form {
             string codeFile = Ps2CodesForm.WriteActivePatches(root);
             var start = new ProcessStartInfo(game, Quote(elf) + " --disc " + Quote(disc) + " --memcard " + Quote(card) + " --quick-dir " + Quote(quick) + " --window" + (options.Yes("wide") ? " --widescreen" : "") + (codeFile == null ? "" : " --patches " + Quote(codeFile)));
             start.WorkingDirectory = root; start.UseShellExecute = false;
+            start.EnvironmentVariables["PHANTOM_LANGUAGE"] = PhantomLanguage.English ? "en" : "fr";
             start.EnvironmentVariables["PS2_SCALE"] = res; start.EnvironmentVariables["PS2_WINDOW_TITLE"] = UniqueLauncher.PreparedGameTitle;
             string playerFile = Path.Combine(root, "phantom-players.txt");
             string playerLimit = File.Exists(playerFile) ? File.ReadAllText(playerFile).Trim() : "2";
@@ -149,13 +151,14 @@ class Ps2GameForm : Form {
             status.Text = "";
         } catch (Exception ex) {
             PhantomLaunchReport.Show(this, ex, game);
-            status.Text = "Lancement impossible.";
+            status.Text = PhantomLanguage.English ? "Unable to start." : "Lancement impossible.";
         } finally { play.Enabled = true; scale.Enabled = true; fullscreen.Enabled = true; }
     }
 }
 
 static class PhantomInlinePage {
     public static void Show(Form host, Form page, Action<DialogResult> finished) {
+        PhantomLanguage.Apply(page);
         page.TopLevel = false; page.FormBorderStyle = FormBorderStyle.None;
         page.Dock = DockStyle.Fill; host.Controls.Add(page);
         page.FormClosed += delegate {

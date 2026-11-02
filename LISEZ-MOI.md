@@ -4,6 +4,8 @@
 
 **Pour les développeurs :** `PhantomStation-sources-sans-dependances.zip` contient les sources, sans l’EXE ni les outils ; il ne fonctionne pas seul. Ces versions restent expérimentales.
 
+Le sélecteur **FR / EN** du compilateur mémorise la langue de l’interface. Les nouveaux lanceurs PS2 et Nintendo utilisent aussi ce choix, et certains contrôles PS1 sont traduits. Des messages des moteurs et des lanceurs déjà créés peuvent rester dans leur langue d’origine. La langue du jeu dépend de son disque ou de sa cartouche.
+
 PhantomStation propose la création de jeux PS1, PS2, NES, Super Nintendo et Nintendo 64. GoldenEye 007 Europe utilise un portage particulier ; les autres jeux N64 utilisent un moteur commun expérimental. La création d’un EXE ne garantit pas que le jeu entier fonctionne.
 
 - **PS1** : choisir le fichier `.cue` avec ses `.bin` à côté, ou une image `.iso` ; ajouter les CD dans l’ordre.

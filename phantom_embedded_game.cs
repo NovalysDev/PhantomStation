@@ -40,7 +40,7 @@ class PhantomEmbeddedGame {
 
     public PhantomEmbeddedGame(Form form) {
         owner = form;
-        status = new Label { Text = "Chargement du jeu…", AutoSize = true,
+        status = new Label { Text = PhantomLanguage.Text("Chargement du jeu…"), AutoSize = true,
             BackColor = Color.FromArgb(4, 10, 22), ForeColor = Color.White,
             Font = new Font("Segoe UI", 11), Visible = false };
         owner.Controls.Add(status);
@@ -62,7 +62,7 @@ class PhantomEmbeddedGame {
 
     void Begin() {
         active = true; closeRequested = false; shown.Clear();
-        status.Text = "Chargement du jeu…";
+        status.Text = PhantomLanguage.Text("Chargement du jeu…");
         foreach (Control control in owner.Controls) if (control != status && control.Visible) { shown.Add(control); control.Visible = false; }
         status.Visible = true; ResizeChild(); status.BringToFront();
     }
@@ -141,7 +141,7 @@ class PhantomEmbeddedGame {
                         child = IntPtr.Zero;
                         running = null;
                         if (!owner.Visible) owner.Show();
-                        status.Text = "Nouvel essai de lancement…";
+                        status.Text = PhantomLanguage.Text("Nouvel essai de lancement…");
                         status.Visible = true; status.BringToFront();
                         await Task.Delay(350);
                         if (closeRequested) break;

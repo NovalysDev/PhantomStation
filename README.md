@@ -6,7 +6,12 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 > **Development snapshot:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The present repository is a private source snapshot for further development; it is not a ready-to-install release.
 
-An integrated Windows distribution is being prepared so players do not have to install Python, Git, the compilers or the console engines themselves. Local prototypes have been tested, but no complete installable release has been published yet.
+Two archives are available in the [private test draft](https://github.com/NovalysDev/PhantomStation/releases):
+
+- **PhantomStation-portable-essai.zip** is the Windows test package with Python, Git, compilers and the available console engines included. Extract it into its own folder and run `PhantomStation.exe`. It is approximately 836 MiB compressed and 2.4 GiB extracted; building games requires additional space.
+- **PhantomStation-sources-sans-dependances.zip** is a smaller source snapshot for development. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot be used as a standalone application. Its source, upstream version pins and local patches are also available in this repository.
+
+The portable package has been tested locally, not yet on a clean independent PC. Both archives are experimental; no public stable release has been published. Game images and user saves are not included. Before any public distribution, third-party components and media, including the GoldenEye port, still require a review of their redistribution terms.
 
 ## What it does
 

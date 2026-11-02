@@ -2,8 +2,6 @@
 
 **Pour utiliser PhantomStation :** télécharge `PhantomStation-portable-essai.zip` dans le [brouillon privé GitHub](https://github.com/NovalysDev/PhantomStation/releases), extrais-le dans un dossier et ouvre `PhantomStation.exe`. Les moteurs et outils sont inclus.
 
-**Tu as déjà téléchargé PhantomStation ?** Le petit fichier `Correctif-PhantomStation-icone-N64-1.0.2.zip` corrige l’icône et la compilation N64 dans les dossiers avec parenthèses. Ferme le compilateur, extrais le contenu du correctif directement dans son dossier, et accepte le remplacement des fichiers. Tes jeux, sauvegardes et réglages ne sont pas dans le correctif.
-
 **Pour les développeurs :** `PhantomStation-sources-sans-dependances.zip` contient les sources, sans l’EXE ni les outils ; il ne fonctionne pas seul. Ces versions restent expérimentales.
 
 PhantomStation propose la création de jeux PS1, PS2, NES, Super Nintendo et Nintendo 64. GoldenEye 007 Europe utilise un portage particulier ; les autres jeux N64 utilisent un moteur commun expérimental. La création d’un EXE ne garantit pas que le jeu entier fonctionne.

@@ -1,5 +1,7 @@
 # Private publication review — 2 November 2026
 
+**Update:** the project owner subsequently reported having authorization to distribute the PS2 startup sound and GoldenEye component. The authorization documents were not independently reviewed. This record describes the earlier technical review; the other license and compatibility checks below remain relevant.
+
 This is a technical review of the private project and its test archives. It is
 not a legal opinion and does not approve publication. The public repository
 and the downloadable Windows archive must be assessed separately.

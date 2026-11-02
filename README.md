@@ -8,9 +8,9 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 ## Which download should I choose?
 
-**The portable test download is being prepared and is not yet publicly available.** Once published in [Releases](https://github.com/NovalysDev/PhantomStation/releases), `PhantomStation-portable-essai.zip` is the version for players: extract it into a folder and open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
+**To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [test release](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
 
-**For developers only:** the source snapshot in this repository does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot run by itself. The smaller `PhantomStation-sources-sans-dependances.zip` is also being prepared. Upstream version pins and local patches are available in this repository.
+**For developers only:** `PhantomStation-sources-sans-dependances.zip` contains a smaller source snapshot. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot run by itself. Its source, upstream version pins and local patches are also available in this repository.
 
 The portable package has been tested locally and on a separate test laptop; compatibility is not established for every game or system. Both archives are experimental; no stable release has been published. Game images and user saves are not included. Third-party components and media, including the GoldenEye port and console startup sounds, have unresolved redistribution questions documented in [the publication review](docs/PUBLICATION_REVIEW.md).
 

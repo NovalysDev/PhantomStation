@@ -6,7 +6,7 @@ import subprocess
 import zipfile
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 
 from phantom_ui import ctk, button, tr, load_language, BG, MUTED, TEXT
 
@@ -48,6 +48,9 @@ class GameInCompiler:
         self.closing = False
         self.previous_protocol = None
         self.last_close = 0
+        self.game_info = None
+        self.report_hotkey = None
+        self.report_open = False
 
     def start(self, exe, env=None):
         if self.process is not None:
@@ -63,6 +66,7 @@ class GameInCompiler:
         from bibliotheque import game_info
         from cartes_memoire import launch_environment, backup_selected
         info = game_info(exe, include_cover=False)
+        self.game_info = info
         selected = launch_environment(info)
         environment.update(selected)
         if selected:
@@ -105,6 +109,7 @@ class GameInCompiler:
         toolbar = ctk.CTkFrame(self.overlay, fg_color='#101d31', corner_radius=0, height=48)
         toolbar.pack(fill='x')
         button(toolbar, '← Retour au compilateur', self.close_game, width=200).pack(side='left', padx=10, pady=6)
+        button(toolbar, 'Signaler un bug  ·  F10', self.report_game, width=170).pack(side='right', padx=10, pady=6)
         self.status = tk.StringVar(value=tr('Ouverture du jeu…'))
         ctk.CTkLabel(toolbar, textvariable=self.status, text_color=TEXT, anchor='w').pack(side='left', fill='x', expand=True, padx=12)
         self.surface = tk.Frame(self.overlay, bg='#030814', highlightthickness=0)
@@ -113,6 +118,12 @@ class GameInCompiler:
         self.root.update_idletasks()
         self.previous_protocol = self.root.protocol('WM_DELETE_WINDOW')
         self.root.protocol('WM_DELETE_WINDOW', self.close_game)
+        from phantom_report_hotkey import GameReportHotkey
+        self.report_hotkey = GameReportHotkey()
+        self.report_hotkey.update_pids({self.process.pid})
+        if not self.report_hotkey.start():
+            messagebox.showwarning(tr('Signaler un bug'),
+                tr('Le raccourci F10 est indisponible. Utilise le bouton Signaler un bug.'), parent=self.root)
         self._poll()
 
     def _processes(self):
@@ -167,6 +178,10 @@ class GameInCompiler:
     def _poll(self):
         try:
             pids = self._processes()
+            if self.report_hotkey:
+                self.report_hotkey.update_pids(pids)
+                if self.report_hotkey.consume() and not self.report_open:
+                    self.report_game()
             if not pids and self.process.poll() is not None:
                 self._finish(); return
             valid = self.child and user32.IsWindow(self.child) and user32.IsWindowVisible(self.child)
@@ -202,6 +217,27 @@ class GameInCompiler:
             self._finish()
             messagebox.showerror(tr('Fenêtre du jeu'), str(exc), parent=self.root)
 
+    def report_game(self):
+        if not self.game_info or self.report_open:
+            return
+        self.report_open = True
+        try:
+            description = simpledialog.askstring(tr('Signaler un bug'),
+                tr('Que se passe-t-il et à quel moment ?'), parent=self.root)
+            if description is None:
+                return
+            from diagnostic_jeu import create_game_diagnostic
+            from phantom_report_ui import open_report_dialog
+            path, text = create_game_diagnostic(self.game_info, description)
+            dialog = open_report_dialog(self.root, {'path': path, 'text': text, 'game': self.game_info['name'],
+                                                    'kind': 'jeu', 'attachment': True})
+            if dialog is not None:
+                self.root.wait_window(dialog)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(tr('Rapport impossible'), str(exc), parent=self.root)
+        finally:
+            self.report_open = False
+
     def close_game(self):
         import time
         self.closing = True
@@ -211,6 +247,9 @@ class GameInCompiler:
             self.last_close = time.monotonic()
 
     def _finish(self):
+        if self.report_hotkey is not None:
+            self.report_hotkey.close()
+            self.report_hotkey = None
         if self.after_id is not None:
             try: self.root.after_cancel(self.after_id)
             except tk.TclError: pass

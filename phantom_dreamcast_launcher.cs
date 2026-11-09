@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
@@ -134,6 +134,10 @@ class DreamcastGameForm : Form {
 #endif
             start.EnvironmentVariables["PHANTOM_DC_SCALE"]=(scale.SelectedIndex+1).ToString();
             start.EnvironmentVariables["DCRECOMP_NO_PRESENT"]="1";
+            // Continuous WAV captures used hundreds of megabytes per play.
+            // Ordinary diagnostics go to the one bounded game log instead.
+            if (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PHANTOM_DC_SON_ANALYSE")))
+                start.EnvironmentVariables["PHANTOM_DC_SON_ANALYSE"]="0";
             if(audio.Checked) start.EnvironmentVariables["PHANTOM_DC_AUDIO"]="1";
             await session.Run(start,true,fullscreen.Checked);
         } catch(Exception ex) { PhantomLaunchReport.Show(this,ex,game,ex is PhantomGameCrashException); }

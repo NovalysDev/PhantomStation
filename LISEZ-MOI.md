@@ -1,6 +1,6 @@
 # PhantomStation
 
-> Les sources du dépôt sont plus récentes que les archives de test v1.0.4 ; ces anciennes archives ne contiennent pas encore les nouveautés Dreamcast et cartes mémoire.
+> **Version de test 1.0.5 :** toutes les consoles peuvent présenter des bugs. La Dreamcast vient d’être ajoutée et reste particulièrement expérimentale. Pendant un jeu, utilise **F10** ou **Signaler un bug** pour transmettre le journal complet.
 
 La compilation PS2 et Dreamcast conserve localement des informations propres à chaque disque. Elles peuvent être reprises lors d’une prochaine compilation du même jeu ; cela ne garantit pas sa compatibilité complète et ne modifie pas automatiquement un jeu déjà créé.
 
@@ -10,15 +10,18 @@ La compilation PS2 et Dreamcast conserve localement des informations propres à 
 
 Le sélecteur **FR / EN** du compilateur mémorise la langue de l’interface. Les nouveaux lanceurs PS2 et Nintendo utilisent aussi ce choix, et certains contrôles PS1 sont traduits. Des messages des moteurs et des lanceurs déjà créés peuvent rester dans leur langue d’origine. La langue du jeu dépend de son disque ou de sa cartouche.
 
-PhantomStation propose la création de jeux PS1, PS2, NES, Super Nintendo et Nintendo 64. GoldenEye 007 Europe utilise un portage particulier ; les autres jeux N64 utilisent un moteur commun expérimental. La création d’un EXE ne garantit pas que le jeu entier fonctionne.
+PhantomStation propose la création de jeux PS1, PS2, NES, Super Nintendo, Nintendo 64 et Dreamcast. GoldenEye 007 Europe utilise un portage particulier ; les autres jeux N64 utilisent un moteur commun expérimental. La création d’un EXE ne garantit pas que le jeu entier fonctionne.
 
 - **PS1** : choisir le fichier `.cue` avec ses `.bin` à côté, ou une image `.iso` ; ajouter les CD dans l’ordre.
 - **PS2** : choisir une image `.iso`.
 - **NES** : choisir une cartouche `.nes`.
 - **Super Nintendo** : choisir une cartouche `.sfc` ou `.smc`.
 - **Nintendo 64** : choisir une cartouche `.z64`, `.v64` ou `.n64`. La compatibilité varie selon le jeu ; le moteur commun est expérimental.
+- **Dreamcast** : choisir un fichier `.chd`. Le moteur, le son, les graphismes et les sauvegardes restent expérimentaux.
 
-Extraire d’abord les archives `.7z` ; le format `.chd` n’est pas pris en charge. Dans les jeux NES et Super Nintendo, les commandes et réglages s’ouvrent avec F2, les filtres avec F3 et les sauvegardes rapides avec F8/F9. Dans GoldenEye N64, F10 ouvre les réglages du moteur ; les codes sont ceux du jeu. Les options ne sont pas identiques à celles des jeux PlayStation.
+Extraire d’abord les archives `.7z` ; le format `.chd` est pris en charge pour la Dreamcast. Dans les jeux NES et Super Nintendo, les commandes et réglages s’ouvrent avec F2, les filtres avec F3 et les sauvegardes rapides avec F8/F9. Dans GoldenEye N64, F10 ouvre les réglages du moteur ; les codes sont ceux du jeu. Les options ne sont pas identiques à celles des jeux PlayStation.
+
+Pour signaler un bug, ouvre le jeu depuis la bibliothèque puis appuie sur **F10** ou clique sur **Signaler un bug**. Décris le problème et vérifie le rapport : le journal complet est envoyé seulement si tu choisis de l’envoyer. Un seul journal limité en taille est conservé par jeu et remplacé à son prochain lancement. La touche F10 reste transmise au jeu ; elle peut aussi ouvrir ses réglages si celui-ci l’utilise.
 
 Les jeux Nintendo utilisent [RetroRecomp](https://github.com/ArthurReboulSalze/RetroRecomp), [NESRecomp](https://github.com/mstan/nesrecomp) et [SNESRecomp](https://github.com/RetroPortingToolKit/snesrecomp). Les moteurs NES/SNES ont des licences **PolyForm Noncommercial** ; les notices et licences sont conservées dans `nintendo-recomp`. PhantomStation applique un correctif PAL au moteur NES et dirige les données des jeux vers le dossier Documents.
 

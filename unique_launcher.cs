@@ -14,66 +14,65 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-// Separate, bounded diagnostics for each game and launch. Keep draining the
-// process even if the log cannot be written, otherwise its pipe can fill.
-static class PhantomGameJournal {
+// One bounded, game-specific log; a new launch replaces the previous one.
+sealed class PhantomGameJournal : IDisposable {
     const long Limit = 8000000;
-    public static string NewSession(string root, string title, string id, int attempt) {
+    readonly object gate = new object();
+    readonly string heading;
+    StreamWriter writer;
+
+    PhantomGameJournal(StreamWriter output, string title) { writer = output; heading = title; }
+    public static PhantomGameJournal NewSession(string root, string title, string id, int attempt) {
         Guid parsed;
         if (!Guid.TryParseExact(id ?? "", "N", out parsed)) throw new ArgumentException("Identité du jeu invalide.");
+        string games = Path.Combine(root, "Jeux"); Directory.CreateDirectory(games);
+        string[] existing = Directory.GetDirectories(games, "* - " + parsed.ToString("N"));
         var clean = new StringBuilder();
         foreach (char c in title ?? "")
             clean.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 || Char.IsControl(c) ? '_' : c);
         string name = clean.ToString().Trim().TrimEnd('.');
         if (name.Length > 70) name = name.Substring(0, 70).TrimEnd(' ', '.');
         if (name.Length == 0) name = "Jeu";
-        string folder = Path.Combine(root, "Jeux", name + " - " + parsed.ToString("N"));
+        string folder = existing.Length > 0 ? existing[0] : Path.Combine(games, name + " - " + parsed.ToString("N"));
         Directory.CreateDirectory(folder);
-        return Path.Combine(folder, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff") +
-            "-essai-" + attempt + "-" + Guid.NewGuid().ToString("N"));
+        string heading = "Jeu : " + title + " | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " | essai " + attempt;
+        var output = new StreamWriter(new FileStream(Path.Combine(folder, "journal.log"), FileMode.Create, FileAccess.Write, FileShare.Read), Encoding.UTF8);
+        output.WriteLine(heading); output.Flush();
+        // Remove only logs created by the former per-session scheme.
+        foreach (string pattern in new[]{"*-moteur.log", "*-erreurs.log", "*-moteur.log.precedent", "*-erreurs.log.precedent"})
+            foreach (string path in Directory.GetFiles(folder, pattern))
+                try { File.Delete(path); } catch (IOException) {} catch (UnauthorizedAccessException) {}
+        return new PhantomGameJournal(output, heading);
     }
-    public static string Drain(TextReader reader, string path, string heading, bool keepTail) {
-        StreamWriter writer = null;
-        var tail = new StringBuilder();
-        try {
-            if (!String.IsNullOrEmpty(path)) {
-                try {
-                    writer = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), Encoding.UTF8);
-                    writer.WriteLine(heading); writer.Flush();
-                } catch (IOException) { if (writer != null) writer.Dispose(); writer = null; }
-                  catch (UnauthorizedAccessException) { if (writer != null) writer.Dispose(); writer = null; }
-            }
-            string line;
-            while ((line = reader.ReadLine()) != null) {
-                if (keepTail) {
-                    tail.AppendLine(line);
-                    if (tail.Length > 16000) tail.Remove(0, tail.Length - 16000);
-                }
-                if (!keepTail && (line.StartsWith("[CH2-DMA]") || line.StartsWith("[HEARTBEAT]"))) continue;
-                if (writer == null) continue;
-                try {
-                    if (writer.BaseStream.Length >= Limit) {
-                        writer.Dispose(); writer = null;
-                        File.Copy(path, path + ".precedent", true);
-                        writer = new StreamWriter(new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read), Encoding.UTF8);
-                        writer.WriteLine(heading + " (suite)");
-                    }
-                    writer.WriteLine(line); writer.Flush();
-                } catch (IOException) { if (writer != null) writer.Dispose(); writer = null; }
-                  catch (UnauthorizedAccessException) { if (writer != null) writer.Dispose(); writer = null; }
-            }
-        } finally { if (writer != null) writer.Dispose(); }
-        return tail.ToString();
-    }
-    public static string Session(int attempt) {
+    public static PhantomGameJournal Session(int attempt) {
         try {
             return NewSession(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                               "PhantomStation", "Journaux"), UniqueLauncher.PreparedGameTitle,
                               UniqueLauncher.PreparedGameId, attempt);
-        } catch (IOException) { return null; }
-          catch (UnauthorizedAccessException) { return null; }
-          catch (ArgumentException) { return null; }
+        } catch (IOException) { return new PhantomGameJournal(null, ""); }
+          catch (UnauthorizedAccessException) { return new PhantomGameJournal(null, ""); }
+          catch (ArgumentException) { return new PhantomGameJournal(null, ""); }
     }
+    public string Drain(TextReader reader, bool errors) {
+        var tail = new StringBuilder(); string line;
+        while ((line = reader.ReadLine()) != null) {
+            if (errors) { tail.AppendLine(line); if (tail.Length > 16000) tail.Remove(0, tail.Length - 16000); }
+            if (!errors && (line.StartsWith("[CH2-DMA]") || line.StartsWith("[HEARTBEAT]"))) continue;
+            lock (gate) {
+                if (writer == null) continue;
+                try {
+                    if (writer.BaseStream.Length >= Limit) {
+                        writer.Flush(); writer.BaseStream.SetLength(0); writer.BaseStream.Position = 0;
+                        writer.WriteLine(heading + " (suite)");
+                    }
+                    writer.WriteLine(errors ? "[ERREUR] " + line : line); writer.Flush();
+                } catch (IOException) { try { writer.Dispose(); } catch (IOException) {} writer = null; }
+                  catch (UnauthorizedAccessException) { try { writer.Dispose(); } catch (IOException) {} writer = null; }
+            }
+        }
+        return tail.ToString();
+    }
+    public void Dispose() { lock (gate) { if (writer != null) { writer.Dispose(); writer = null; } } }
 }
 
 // The appended ZIP contains the game files. The per-package cache retains
@@ -560,19 +559,18 @@ class PreparingForm : Form {
                 });
                 foregroundThread.IsBackground = true;
                 foregroundThread.Start();
-                string journal = PhantomGameJournal.Session(1);
-                string heading = "Jeu : " + UniqueLauncher.PreparedGameTitle + " | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                var journal = PhantomGameJournal.Session(1);
                 var stdout = process.StandardOutput; var stderr = process.StandardError;
-                var outputTask = Task.Run(() => PhantomGameJournal.Drain(stdout, journal == null ? null : journal + "-moteur.log", heading, false));
-                var errorTask = Task.Run(() => PhantomGameJournal.Drain(stderr, journal == null ? null : journal + "-erreurs.log", heading, true));
+                var outputTask = Task.Run(() => journal.Drain(stdout, false));
+                var errorTask = Task.Run(() => journal.Drain(stderr, true));
                 Hide();
-                WatchGame(process, game, outputTask, errorTask);
+                WatchGame(process, game, outputTask, errorTask, journal);
                 return;
             }
         } catch (Exception ex) { PhantomLaunchReport.Show(this, ex, UniqueLauncher.PackagePath); }
         Close();
     }
-    async void WatchGame(Process process, string executable, Task<string> outputTask, Task<string> errorTask) {
+    async void WatchGame(Process process, string executable, Task<string> outputTask, Task<string> errorTask, PhantomGameJournal journal) {
         try {
             await Task.Run(() => process.WaitForExit());
             await outputTask;
@@ -589,6 +587,7 @@ class PreparingForm : Form {
         } catch (Exception ex) {
             PhantomLaunchReport.Show(this, ex, executable, true);
         } finally {
+            journal.Dispose();
             process.Dispose();
             Close();
         }

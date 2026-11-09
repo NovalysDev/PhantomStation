@@ -141,12 +141,11 @@ class PhantomEmbeddedGame {
                 LogLaunch(owner.Text + " : démarrage, essai " + attempt);
                 using (running = Process.Start(game)) {
                     if (running == null) throw new InvalidOperationException("Le jeu n’a pas démarré.");
-                    string journal = PhantomGameJournal.Session(attempt);
-                    string heading = "Jeu : " + UniqueLauncher.PreparedGameTitle + " | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " | essai " + attempt;
+                    using (var journal = PhantomGameJournal.Session(attempt)) {
                     var errorStream = running.StandardError;
-                    var errorOutput = Task.Run(() => PhantomGameJournal.Drain(errorStream, journal == null ? null : journal + "-erreurs.log", heading, true));
+                    var errorOutput = Task.Run(() => journal.Drain(errorStream, true));
                     var standardOutput = running.StandardOutput;
-                    var pumpOutput = Task.Run(() => PhantomGameJournal.Drain(standardOutput, journal == null ? null : journal + "-moteur.log", heading, false));
+                    var pumpOutput = Task.Run(() => journal.Drain(standardOutput, false));
                     bool attached = await Attach(running);
                     // Some graphics backends refuse Windows parenting. Keep just one
                     // visible window in that case, and restore the launcher on exit.
@@ -172,6 +171,7 @@ class PhantomEmbeddedGame {
                     if (error.Length > 1500) error = error.Substring(error.Length - 1500);
                     throw new PhantomGameCrashException("Le jeu s’est arrêté (code 0x" + unchecked((uint)exitCode).ToString("X8") + ")." +
                         (error.Length == 0 ? "" : "\n\n" + error));
+                    }
                 }
             }
         } catch (Exception ex) {

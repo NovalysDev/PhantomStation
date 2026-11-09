@@ -1,5 +1,6 @@
 """Rapports de compilation : fichier complet et brouillon dans la messagerie."""
 import re
+import base64
 import json
 import urllib.error
 import urllib.parse
@@ -62,12 +63,12 @@ def submission_payload(game, text, kind='compilation'):
     limit = 1900
     shortened = len(text) > limit
     if shortened:
-        header = re.split(r'\n\n--- (?:Journal de compilation|Erreur de lancement) ---', text, maxsplit=1)[0][:450]
+        header = re.split(r'\n\n--- (?:Journal de compilation|Erreur de lancement|Dernières lignes du jeu) ---', text, maxsplit=1)[0][:450]
         marker = '\n\n[Journal abrégé : le rapport complet reste sur le PC]\n'
         text = header + marker + text[-(limit-len(header)-len(marker)):]
     subject = re.sub(r'[\r\n\x00-\x1f]+', ' ', game).strip()[:85]
     payload = {'name': 'PhantomStation', 'email': 'noreply@phantomstation.invalid',
-               'subject': ('Rapport de lancement' if kind == 'launch' else 'Rapport de compilation') + (' - ' + subject if subject else ''),
+               'subject': ('Rapport de jeu' if kind == 'jeu' else 'Rapport de lancement' if kind == 'launch' else 'Rapport de compilation') + (' - ' + subject if subject else ''),
                'message': text, 'website': ''}
     if not 5 <= len(text) <= 2000:
         raise ValueError('Le rapport ne peut pas être préparé.')
@@ -104,3 +105,37 @@ def send_report(payload, endpoint=REPORT_ENDPOINT, timeout=15):
         raise OSError('Le service de rapport est indisponible (code ' + str(exc.code) + ').') from exc
     except (urllib.error.URLError, TimeoutError, UnicodeError, ValueError) as exc:
         raise OSError('Impossible de joindre le service de rapport.') from exc
+
+
+def send_game_diagnostic(payload, archive, endpoint=REPORT_ENDPOINT, timeout=30):
+    """Send the complete ZIP only after the relay confirms attachment support."""
+    archive = Path(archive)
+    if not archive.is_file() or archive.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError('Diagnostic introuvable ou trop volumineux (8 Mio maximum).')
+    parsed = urllib.parse.urlsplit(endpoint)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError('Adresse du service de rapport invalide.')
+    opener = urllib.request.build_opener(_NoRedirect())
+    headers = {'Content-Type':'application/json; charset=utf-8', 'Accept':'application/json',
+               'User-Agent':'PhantomStation/1.0'}
+    def request(data):
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+        with opener.open(req, timeout=timeout) as response:
+            raw = response.read(8193)
+            if response.status != 200 or len(raw) > 8192:
+                raise OSError('Réponse du service de rapport invalide.')
+            return json.loads(raw.decode('utf-8'))
+    try:
+        probe = request({'diagnostic_probe': True})
+        if not isinstance(probe, dict) or probe.get('diagnostic_complet') != 1:
+            raise OSError('Le service ne prend pas encore en charge les diagnostics complets.')
+        data = dict(payload)
+        data['diagnostic_b64'] = base64.b64encode(archive.read_bytes()).decode('ascii')
+        result = request(data)
+        if not isinstance(result, dict) or result.get('diagnostic_recu') is not True:
+            raise OSError('La réception du fichier complet n’a pas été confirmée.')
+    except urllib.error.HTTPError as exc:
+        raise OSError('Le service a refusé le diagnostic (code ' + str(exc.code) + ').') from exc
+    except (urllib.error.URLError, TimeoutError, UnicodeError, ValueError) as exc:
+        raise OSError('Impossible de transmettre le diagnostic complet.') from exc

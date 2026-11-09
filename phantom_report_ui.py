@@ -6,7 +6,7 @@ from tkinter import messagebox
 
 from phantom_ui import ctk, button, panel, tr, BG, TEXT, MUTED
 from phantom_window_icon import set_window_icon
-from rapport_erreur import save_report, submission_payload, send_report
+from rapport_erreur import save_report, submission_payload, send_report, send_game_diagnostic
 
 
 def open_report_dialog(parent, failure):
@@ -33,7 +33,9 @@ def open_report_dialog(parent, failure):
     ctk.CTkLabel(outer, text=tr('Envoyer le rapport d’erreur'), text_color=TEXT, font=('Segoe UI', 21, 'bold'), anchor='w').pack(fill='x')
     ctk.CTkLabel(outer, text=tr('Vérifie le contenu avant l’envoi direct.'), text_color=MUTED, font=('Segoe UI', 11), anchor='w').pack(fill='x', pady=(0, 8))
     footer = ctk.CTkFrame(outer, fg_color='transparent'); footer.pack(side='bottom', fill='x', pady=(8, 0))
-    hint = ('Le rapport sera transmis directement au service Novalys. '
+    hint = ('Le ZIP contient le journal complet, qui peut inclure des chemins locaux. Il sera transmis au service de diagnostic avec le résumé affiché.'
+            if failure.get('attachment') else
+            'Le rapport sera transmis directement au service Novalys. '
             + ('Les dernières lignes sont envoyées ; le journal complet reste enregistré sur le PC.'
                if shortened else 'Le rapport complet affiché sera envoyé.'))
     ctk.CTkLabel(footer, text=hint, text_color=MUTED, font=('Segoe UI', 10), anchor='w', wraplength=690, justify='left').pack(fill='x', pady=(0, 8))
@@ -55,7 +57,9 @@ def open_report_dialog(parent, failure):
 
     def copy_report():
         dialog.clipboard_clear(); dialog.clipboard_append(failure['text'])
-        messagebox.showinfo(tr('Rapport copié'), tr('Le rapport complet est copié. Tu peux le coller dans ton e-mail.'), parent=dialog)
+        note = ('Le résumé est copié. Le ZIP contient les journaux complets.' if failure.get('attachment')
+                else tr('Le rapport complet est copié. Tu peux le coller dans ton e-mail.'))
+        messagebox.showinfo(tr('Rapport copié'), tr(note), parent=dialog)
 
     def open_folder():
         try: os.startfile(str(path.parent))
@@ -84,7 +88,10 @@ def open_report_dialog(parent, failure):
         send_button.configure(state='disabled', text=tr('Envoi en cours…'))
         def worker():
             try:
-                send_report(payload)
+                if failure.get('attachment'):
+                    send_game_diagnostic(payload, path)
+                else:
+                    send_report(payload)
                 failure['sent'] = True
                 failure['send_notification'] = True
             except (OSError, ValueError) as exc:

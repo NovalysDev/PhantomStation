@@ -645,6 +645,9 @@ class App:
             nav = button(sidebar, title, lambda k=key: self.select_navigation(k), width=152, anchor='w')
             nav.pack(fill='x', padx=12, pady=4)
             self.nav_buttons[key] = nav
+        ctk.CTkLabel(sidebar, text=tr('VERSION DE TEST\nDes bugs peuvent survenir sur toutes les consoles.'),
+                     text_color='#f7c66b', font=('Segoe UI', 10, 'bold'), anchor='w', justify='left',
+                     wraplength=160).pack(side='bottom', fill='x', padx=16, pady=(0, 16))
         ctk.CTkLabel(sidebar, text='PLAYSTATION  /  NINTENDO  /  SEGA', text_color='#6d829b', font=('Segoe UI', 9, 'bold'), anchor='w').pack(side='bottom', fill='x', padx=19, pady=(0, 20))
         language_area = ctk.CTkFrame(sidebar, fg_color='transparent')
         language_area.pack(side='bottom', fill='x', padx=13, pady=(0, 14))

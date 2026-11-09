@@ -6,17 +6,21 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 > **Experimental project:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The portable download is a test version, not a stable release.
 
-> **Source update:** the repository contains newer work than the v1.0.4 downloadable test release. The existing archives do not include the Dreamcast, memory-card or learning changes described below.
+> **v1.0.5 test release:** all supported consoles can have bugs. Dreamcast support has been added and remains especially experimental. Please report issues with the in-game **F10** command or **Report a bug** button.
 
 ## Which download should I choose?
 
-**To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [test release](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download is approximately 836 MiB and takes approximately 2.4 GiB once extracted; building games requires additional space.
+**To use PhantomStation, download `PhantomStation-portable-essai.zip`** from the [test release](https://github.com/NovalysDev/PhantomStation/releases). Extract it into a folder, then open `PhantomStation.exe`. Python, Git, the compilers and the available console engines are included. The download and extracted installation require substantial disk space; building games requires additional space.
 
 **For developers only:** `PhantomStation-sources-sans-dependances.zip` contains a smaller source snapshot. It does not include `PhantomStation.exe`, the engines, Python or the build tools and cannot run by itself. Its source, upstream version pins and local patches are also available in this repository.
 
-The portable package has been tested locally and on a separate test laptop; compatibility is not established for every game or system. Both archives are experimental; no stable release has been published. Game images and user saves are not included. The project owner reports having permission to distribute the PS2 startup sound and GoldenEye component; those permissions have not been independently verified. Other third-party components remain subject to their respective licenses; see [the publication review](docs/PUBLICATION_REVIEW.md).
+An earlier portable package was tested locally and on a separate test laptop; this version has been checked locally, compatibility is not established for every game or system. Both archives are experimental; no stable release has been published. Game images and user saves are not included. The project owner reports having permission to distribute the PS2 startup sound and GoldenEye component; those permissions have not been independently verified. Other third-party components remain subject to their respective licenses; see [the publication review](docs/PUBLICATION_REVIEW.md).
 
 The latest test build improves handling of special characters in build paths, automatic SBI lookup when matching sources agree, console artwork, and reports for launch errors. Large PS2 discs are compressed when needed. If a packaged PS2 game is still 4 GiB or larger, start it from the PhantomStation library: Windows cannot execute that oversized file directly, so the library prepares a small launcher automatically. These changes do not establish that a game will run correctly from start to finish.
+
+## Reporting a game problem
+
+When a game is opened from the PhantomStation library, press **F10** or use **Report a bug**, describe the issue and review the report. The complete current game log is attached and sent only when you select **Send report**. The receiving address is not shown in the application. One bounded log is retained per game and replaced at its next launch. F10 is also passed to the game, so a game that already uses F10 can react to it.
 
 ## What it does
 
@@ -130,4 +134,4 @@ The license for original PhantomStation code has **not yet been selected**. Publ
 
 ## Project status
 
-This is a work in progress by **NovalysDev**. Priorities include reproducible installation, accurate per-game compatibility reporting, runtime stability, complete controller support, consistent settings and broader PAL testing. The Dreamcast path is present as an experimental source integration; it is not included in the older v1.0.4 downloads.
+This is a work in progress by **NovalysDev**. Priorities include reproducible installation, accurate per-game compatibility reporting, runtime stability, complete controller support, consistent settings and broader PAL testing. The Dreamcast path is included as an experimental feature in the v1.0.5 test release.

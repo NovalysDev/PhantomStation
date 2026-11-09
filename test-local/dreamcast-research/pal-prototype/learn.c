@@ -18,6 +18,7 @@
 
 #define LEARN_MAX_TARGETS 512
 #define LEARN_MAX_DUMPS   48
+#define LEARN_SIGNATURE_BYTES 32u
 #define GD_RING           256
 #define WINDOW_BEFORE     0x20000u
 #define WINDOW_AFTER      0x40000u
@@ -25,7 +26,12 @@
 static uint32_t g_boot_start = 0x0c010000u, g_boot_end = 0x0c010000u;
 static uint32_t g_gd_dest[GD_RING], g_gd_bytes[GD_RING];
 static unsigned g_gd_n;
-static uint32_t g_seen[LEARN_MAX_TARGETS];
+typedef struct {
+    uint32_t address;
+    uint8_t length;
+    uint8_t bytes[LEARN_SIGNATURE_BYTES];
+} LearnedSeen;
+static LearnedSeen g_seen[LEARN_MAX_TARGETS];
 static unsigned g_seen_n, g_dumps;
 
 void phantom_learn_set_boot(uint32_t size) { g_boot_end = g_boot_start + size; }
@@ -86,9 +92,20 @@ void phantom_unresolved(SH4CPU *cpu) {
     if (!dir) return;
     uint32_t target = cpu->pc, phys = target & 0x1fffffffu;
     if (phys < 0x0c008000u || phys >= 0x0c000000u + cpu->ram_size || (phys & 1)) return;
-    for (unsigned i = 0; i < g_seen_n; i++) if (g_seen[i] == phys) return;
+    if (!cpu->ram) return;
+    uint32_t offset = phys - 0x0c000000u;
+    uint32_t length = cpu->ram_size - offset;
+    if (length > LEARN_SIGNATURE_BYTES) length = LEARN_SIGNATURE_BYTES;
+    /* Different overlays may occupy the same address in a single session.
+     * Deduplicate by address AND live bytes, not by address alone. */
+    for (unsigned i = 0; i < g_seen_n; i++)
+        if (g_seen[i].address == phys && g_seen[i].length == length &&
+            !memcmp(g_seen[i].bytes, cpu->ram + offset, length)) return;
     if (g_seen_n >= LEARN_MAX_TARGETS) return;
-    g_seen[g_seen_n++] = phys;
+    g_seen[g_seen_n].address = phys;
+    g_seen[g_seen_n].length = (uint8_t)length;
+    memcpy(g_seen[g_seen_n].bytes, cpu->ram + offset, length);
+    g_seen_n++;
 
     char path[1024];
     /* Created on first use, so a session that met no unknown code leaves

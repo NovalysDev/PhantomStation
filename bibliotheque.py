@@ -17,7 +17,7 @@ from PIL import Image
 BASE = Path(__file__).resolve().parent
 LOCAL = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local'))
 LIBRARY_FILE = LOCAL / 'PhantomStation' / 'bibliotheque.json'
-SAVE_SUFFIXES = {'.mcd', '.mcr', '.mc', '.sav', '.srm', '.gme', '.mcs', '.ps', '.ps2', '.state', '.inputs', '.rrstate', '.rrsram', '.eep'}
+SAVE_SUFFIXES = {'.mcd', '.mcr', '.mc', '.sav', '.srm', '.gme', '.mcs', '.ps', '.ps2', '.state', '.inputs', '.rrstate', '.rrsram', '.eep', '.vmu'}
 
 
 def documents_folder():
@@ -70,7 +70,7 @@ def game_info(path, include_cover=True):
     return {'path': path, 'id': lines[0], 'runtime': lines[1],
             'documents_saves': len(lines) > 4 and lines[4].strip() == 'documents-saves-v1',
             'name': title, 'original_name': original_name, 'serial': str(game.get('id') or ''), 'cover': cover, 'source': source,
-            'platform': game.get('platform') if game.get('platform') in ('PS1', 'PS2', 'NES', 'SNES', 'N64') else 'PS1'}
+            'platform': game.get('platform') if game.get('platform') in ('PS1', 'PS2', 'NES', 'SNES', 'N64', 'DC') else 'PS1'}
 
 
 def registered_games():
@@ -171,6 +171,10 @@ def discover_games(output, include_cover=True):
 
 
 def save_directory(game):
+    if game.get('platform') in ('NES', 'SNES', 'N64'):
+        from cartes_memoire import profile_dir
+        profile = profile_dir(game)
+        if profile is not None: return profile
     if game['documents_saves']:
         base = documents_folder() / 'PhantomStation' / 'Sauvegardes'
         matches = [p for p in base.glob('* - ' + game['id']) if p.is_dir() and not p.is_symlink()]

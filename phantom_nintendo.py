@@ -111,7 +111,7 @@ def make_art(platform, rom, name, chosen, work, log):
     if source is None:
         system = {'NES': 'Nintendo_-_Nintendo_Entertainment_System',
                   'SNES': 'Nintendo_-_Super_Nintendo_Entertainment_System',
-                  'N64': 'Nintendo_-_Nintendo_64'}[platform]
+                  'N64': 'Nintendo_-_Nintendo_64', 'DC': 'Sega_-_Dreamcast'}[platform]
         base = 'https://raw.githubusercontent.com/libretro-thumbnails/' + system + '/master/Named_Boxarts/'
         stripped = re.sub(r'\s*\([^)]*\)', '', rom.stem).strip()
         tried = set()
@@ -216,7 +216,7 @@ def build_nintendo_stub(platform, icon, output, work, background=None):
                '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
                '/win32icon:' + str(icon), '/resource:' + str(artwork) + ',art',
                '/resource:' + str(logo) + ',logo', '/resource:' + str(sound) + ',sound',
-               str(source), str(BASE/'phantom_nintendo_launcher.cs'), str(BASE/'phantom_embedded_game.cs')]
+               str(source), str(BASE/'phantom_nintendo_launcher.cs'), str(BASE/'phantom_goldeneye_profile.cs'), str(BASE/'phantom_embedded_game.cs')]
     result = subprocess.run(command, capture_output=True, text=True, errors='replace',
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode:
@@ -485,9 +485,17 @@ if __name__ == '__main__':
     parser.add_argument('--joueurs', type=int, choices=(1, 2, 3, 4, 5))
     args = parser.parse_args()
     try:
+        import erreurs_connues as apprentissage
+        for ligne in apprentissage.preparer(args.console, args.rom, args.nom):
+            print(ligne, flush=True)
         result = build(args.console, args.rom, args.nom, args.sortie, args.icone, args.fond,
                        log=lambda message: print(message, flush=True), players=args.joueurs)
         print('PHANTOM_NINTENDO_RESULT=' + str(result), flush=True)
     except Exception as exc:
+        try:
+            import erreurs_connues as _a
+            print(_a.noter_echec(args.console, args.rom, args.nom, str(exc)), flush=True)
+        except Exception:
+            pass
         print('ERREUR : ' + str(exc), flush=True)
         sys.exit(1)

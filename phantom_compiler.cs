@@ -69,10 +69,8 @@ internal static class PhantomCompiler {
             return;
         }
         string portable = Path.Combine(directory, @"runtime-python\pythonw.exe");
-        string bundled = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            @".cache\codex-runtimes\codex-primary-runtime\dependencies\python\pythonw.exe");
         bool hasPortablePython = File.Exists(portable);
-        string python = hasPortablePython ? portable : (File.Exists(bundled) ? bundled : "pythonw.exe");
+        string python = hasPortablePython ? portable : "pythonw.exe";
         try {
             if (hasPortablePython) {
                 int result = RunPortablePython(Path.GetDirectoryName(portable), script);

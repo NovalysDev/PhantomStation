@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -6,6 +6,10 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+
+class PhantomGameCrashException : Exception {
+    public PhantomGameCrashException(string message) : base(message) {}
+}
 
 // Keep the launcher window alive while an independent game process is running.
 class PhantomEmbeddedGame {
@@ -51,6 +55,17 @@ class PhantomEmbeddedGame {
             closeRequested = true;
             if (!introduction && child != IntPtr.Zero) PostMessage(child, 0x0010, IntPtr.Zero, IntPtr.Zero);
             else if (!introduction && running != null && !running.HasExited) running.CloseMainWindow();
+            // A stalled experimental engine may never process the close message.
+            // Stop only the process started by this session after a grace period.
+            if (!introduction && running != null) {
+                var toStop = running;
+                Task.Run(async () => {
+                    await Task.Delay(3000);
+                    try { if (!toStop.HasExited) toStop.Kill(); }
+                    catch (InvalidOperationException) { }
+                    catch (System.ComponentModel.Win32Exception) { }
+                });
+            }
         };
     }
 
@@ -120,12 +135,41 @@ class PhantomEmbeddedGame {
                 introduction = false;
             }
             game.RedirectStandardError = true;
+            game.RedirectStandardOutput = true;
             for (int attempt = 1; attempt <= 2; attempt++) {
                 var elapsed = Stopwatch.StartNew();
                 LogLaunch(owner.Text + " : démarrage, essai " + attempt);
                 using (running = Process.Start(game)) {
                     if (running == null) throw new InvalidOperationException("Le jeu n’a pas démarré.");
                     var errorOutput = running.StandardError.ReadToEndAsync();
+                    // Keep what the experimental engine prints: list sizes, Maple
+                    // reads and texture failures are the only clues when a scene
+                    // draws nothing. Bounded so a long session cannot fill the disk.
+                    var engineLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                                 "PhantomStation", "Journaux", "jeu-moteur.log");
+                    var standardOutput = running.StandardOutput;
+                    var pumpOutput = Task.Run(() => {
+                        try {
+                            Directory.CreateDirectory(Path.GetDirectoryName(engineLog));
+                            StreamWriter writer = new StreamWriter(engineLog, false);
+                            try {
+                                string line;
+                                while ((line = standardOutput.ReadLine()) != null) {
+                                    /* Les trames DMA et le battement de coeur noyaient tout
+                                     * le reste : 4 Mo partaient en quatre minutes et la fin
+                                     * de la partie, les combats, n'etait jamais enregistree. */
+                                    if (line.StartsWith("[CH2-DMA]") || line.StartsWith("[HEARTBEAT]")) continue;
+                                    if (writer.BaseStream.Length >= 8000000) {
+                                        writer.Dispose();
+                                        try { File.Copy(engineLog, engineLog + ".precedent", true); } catch (IOException) { }
+                                        writer = new StreamWriter(engineLog, false);
+                                    }
+                                    writer.WriteLine(line);
+                                    writer.Flush();
+                                }
+                            } finally { writer.Dispose(); }
+                        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                    });
                     bool attached = await Attach(running);
                     // Some graphics backends refuse Windows parenting. Keep just one
                     // visible window in that case, and restore the launcher on exit.
@@ -136,8 +180,8 @@ class PhantomEmbeddedGame {
                     LogLaunch(owner.Text + " : fin, code " + exitCode + ", durée " +
                               elapsed.ElapsedMilliseconds + " ms, fenêtre intégrée " + attached +
                               (error.Length == 0 ? "" : ", détail " + error.Substring(0, Math.Min(500, error.Length)).Replace('\r',' ').Replace('\n',' ')));
-                    if (exitCode == 0) break;
-                    if (attempt == 1 && elapsed.ElapsedMilliseconds < 8000 && !closeRequested) {
+                    if (exitCode == 0 || closeRequested) break;
+                    if (attempt == 1 && !attached && elapsed.ElapsedMilliseconds < 8000 && !closeRequested) {
                         child = IntPtr.Zero;
                         running = null;
                         if (!owner.Visible) owner.Show();
@@ -148,7 +192,7 @@ class PhantomEmbeddedGame {
                         continue;
                     }
                     if (error.Length > 1500) error = error.Substring(error.Length - 1500);
-                    throw new InvalidOperationException("Le jeu s’est arrêté (code " + exitCode + ")." +
+                    throw new PhantomGameCrashException("Le jeu s’est arrêté (code 0x" + unchecked((uint)exitCode).ToString("X8") + ")." +
                         (error.Length == 0 ? "" : "\n\n" + error));
                 }
             }

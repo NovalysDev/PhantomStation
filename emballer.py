@@ -236,13 +236,13 @@ def _prepare_cheat_catalog(runtime, game, log):
     log(f'{len(entries)} code(s) proposé(s) pour la référence du jeu ; compatibilité à vérifier.\n')
 
 
-def _build_stub(icon, output):
+def _build_stub(icon, output, background=None):
     compiler = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Microsoft.NET' / 'Framework64' / 'v4.0.30319' / 'csc.exe'
     if not compiler.is_file(): raise ValueError('Compilateur Windows .NET introuvable pour créer l’icône.')
     cmd = [str(compiler), '/nologo', '/target:winexe', '/out:' + str(output),
            '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll',
            '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
-           '/win32icon:' + str(icon), '/resource:' + str(BASE/'assets'/'phantom-startup.png') + ',art',
+           '/win32icon:' + str(icon), '/resource:' + str(background or BASE/'assets'/'phantom-startup.png') + ',art',
            '/resource:' + str(BASE/'assets'/'playstation-logo.png') + ',logo',
            '/resource:' + str(BASE/'assets'/'son-demarrage.wav') + ',sound', str(BASE/'unique_launcher.cs')]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)

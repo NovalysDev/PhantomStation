@@ -493,11 +493,32 @@ class PreparingForm : Form {
                         }
                     } catch (InvalidOperationException) { }
                 });
-                foregroundThread.IsBackground = false;
+                foregroundThread.IsBackground = true;
                 foregroundThread.Start();
+                Hide();
+                WatchGame(process, game);
+                return;
             }
         } catch (Exception ex) { PhantomLaunchReport.Show(this, ex, UniqueLauncher.PackagePath); }
         Close();
+    }
+    async void WatchGame(Process process, string executable) {
+        try {
+            await Task.Run(() => process.WaitForExit());
+            int code = process.ExitCode;
+            // Normal closure, including a Ctrl+C exit, is not a crash.
+            if (code != 0 && unchecked((uint)code) != 0xC000013Au) {
+                string message = PhantomLanguage.English
+                    ? "The game stopped unexpectedly (exit code 0x" + unchecked((uint)code).ToString("X8") + ")."
+                    : "Le jeu s’est arrêté de façon inattendue (code 0x" + unchecked((uint)code).ToString("X8") + ").";
+                PhantomLaunchReport.Show(this, new InvalidOperationException(message), executable, true);
+            }
+        } catch (Exception ex) {
+            PhantomLaunchReport.Show(this, ex, executable, true);
+        } finally {
+            process.Dispose();
+            Close();
+        }
     }
 }
 
@@ -541,12 +562,12 @@ static class PhantomLaunchReport {
             }
         }
     }
-    public static void Show(IWin32Window owner, Exception error, string executable) {
+    public static void Show(IWin32Window owner, Exception error, string executable, bool duringGame = false) {
         string title = String.IsNullOrWhiteSpace(UniqueLauncher.PreparedGameTitle) ? Path.GetFileNameWithoutExtension(executable) : UniqueLauncher.PreparedGameTitle;
         bool english = PhantomLanguage.English;
         string report = (english ? "PhantomStation launch report\r\nDate: " : "Rapport de lancement PhantomStation\r\nDate : ") + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss zzz") +
                         (english ? "\r\nGame: " : "\r\nJeu : ") + title + (english ? "\r\nFile: " : "\r\nFichier : ") + executable + (english ? "\r\nSystem: " : "\r\nSystème : ") + Environment.OSVersion +
-                        "\r\nWindows 64 bits : " + Environment.Is64BitOperatingSystem + (english ? "\r\n\r\n--- Launch error ---\r\n" : "\r\n\r\n--- Erreur de lancement ---\r\n") + error;
+                        "\r\nWindows 64 bits : " + Environment.Is64BitOperatingSystem + (duringGame ? (english ? "\r\n\r\n--- Game error ---\r\n" : "\r\n\r\n--- Erreur pendant le jeu ---\r\n") : (english ? "\r\n\r\n--- Launch error ---\r\n" : "\r\n\r\n--- Erreur de lancement ---\r\n")) + error;
         string path = null;
         try {
             string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PhantomStation", "Rapports");
@@ -555,8 +576,8 @@ static class PhantomLaunchReport {
         using (var dialog = new Form { Text = "Erreur de lancement — PhantomStation", Width = 760, Height = 500,
                                       StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false }) {
             var caption = new Label { Dock = DockStyle.Top, Height = 58, Padding = new Padding(12, 8, 12, 0),
-                Text = english ? "Unable to launch the game. " + (path == null ? "The report could not be saved." : "Report saved: " + path)
-                               : "Impossible de lancer le jeu. " + (path == null ? "Le rapport n’a pas pu être enregistré." : "Rapport enregistré : " + path) };
+                Text = english ? (duringGame ? "The game stopped unexpectedly. " : "Unable to launch the game. ") + (path == null ? "The report could not be saved." : "Report saved: " + path)
+                               : (duringGame ? "Le jeu s’est arrêté de façon inattendue. " : "Impossible de lancer le jeu. ") + (path == null ? "Le rapport n’a pas pu être enregistré." : "Rapport enregistré : " + path) };
             var preview = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both,
                                         Dock = DockStyle.Fill, Text = report, WordWrap = false };
             var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };

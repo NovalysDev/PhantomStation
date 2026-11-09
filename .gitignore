@@ -2,6 +2,11 @@
 *.iso
 *.bin
 *.cue
+*.chd
+*.vmu
+*.eep
+*.xex
+*.xbox360
 *.sbi
 *.z64
 *.n64

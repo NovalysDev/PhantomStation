@@ -177,12 +177,20 @@ class NintendoGameForm : Form {
         try {
             var start = new ProcessStartInfo(game) { WorkingDirectory = Path.GetDirectoryName(game), UseShellExecute = false };
             start.EnvironmentVariables["PHANTOM_LANGUAGE"] = PhantomLanguage.English ? "en" : "fr";
-            start.EnvironmentVariables["PHANTOM_RUNTIME_DATA_ROOT"] = saves;
+            string profile = Environment.GetEnvironmentVariable("PHANTOM_SELECTED_PROFILE_DIR");
+            string activeSaves = String.IsNullOrWhiteSpace(profile) ? saves : profile;
+            if (!Directory.Exists(activeSaves)) throw new IOException("Le profil de sauvegarde sélectionné est introuvable.");
+            if (n64 && !genericN64 && !String.IsNullOrWhiteSpace(profile)) {
+                string isolated = PhantomGoldenEyeProfile.Prepare(game, activeSaves);
+                start.FileName = isolated;
+                start.WorkingDirectory = Path.GetDirectoryName(isolated);
+            }
+            start.EnvironmentVariables["PHANTOM_RUNTIME_DATA_ROOT"] = activeSaves;
             start.EnvironmentVariables["PHANTOM_MAX_PLAYERS"] = maxPlayers.ToString();
             if (!n64 && maxPlayers > 2) start.EnvironmentVariables["SNES_MULTITAP"] = "port2";
             if (genericN64) {
                 string codePath = Path.Combine(saves, "codes-n64.tsv");
-                start.Arguments = "--save-dir \"" + saves + "\" --prefs \"" + Path.Combine(saves, "n64_prefs.ini") + "\" --max-players " + maxPlayers +
+                start.Arguments = "--save-dir \"" + activeSaves + "\" --prefs \"" + Path.Combine(saves, "n64_prefs.ini") + "\" --max-players " + maxPlayers +
                     (File.Exists(codePath) ? " --codes \"" + codePath + "\"" : "") +
                     (sender == controllersButton ? " --open-controls" : sender == settingsButton ? " --open-settings" : "");
             }
@@ -190,7 +198,7 @@ class NintendoGameForm : Form {
             if (!n64 && sender == settingsButton) start.EnvironmentVariables["PHANTOM_OPEN_MENU"] = "settings";
             await session.Run(start, sender == play);
         } catch (Exception ex) {
-            PhantomLaunchReport.Show(this, ex, game);
+            PhantomLaunchReport.Show(this, ex, game, ex is PhantomGameCrashException);
         } finally { play.Enabled = true; if (controllersButton != null) controllersButton.Enabled = true; if (settingsButton != null) settingsButton.Enabled = true; if (codesButton != null) codesButton.Enabled = true; }
     }
 

@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 import os
 import subprocess
+import zipfile
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
@@ -55,12 +56,34 @@ class GameInCompiler:
         actual = exe
         environment = os.environ.copy() if env is None else env.copy()
         environment.pop('PHANTOM_PACKAGE_PATH', None)
+        for key in ('PHANTOM_SELECTED_PS1_CARD_DIR', 'PHANTOM_SELECTED_PS1_CARD1', 'PHANTOM_SELECTED_PS1_CARD2', 'PHANTOM_SELECTED_PS2_CARD', 'PHANTOM_SELECTED_PS2_CARD2',
+                    'PHANTOM_SELECTED_DC_CARD', 'PHANTOM_SELECTED_PROFILE_DIR'):
+            environment.pop(key, None)
         environment['PHANTOM_LANGUAGE'] = load_language()
-        from phantom_ps2 import WINDOWS_EXE_LIMIT
-        if exe.stat().st_size >= WINDOWS_EXE_LIMIT:
-            from phantom_ps2 import large_game_launcher
-            actual = large_game_launcher(exe)
+        from bibliotheque import game_info
+        from cartes_memoire import launch_environment, backup_selected
+        info = game_info(exe, include_cover=False)
+        selected = launch_environment(info)
+        environment.update(selected)
+        if selected:
+            backup_selected(info['platform'])
+            if info['platform'] in ('PS1', 'PS2'): backup_selected(info['platform'], 2)
+        # Use current reporting and launch fixes for already-created games too.
+        # The original single-file game remains untouched, even for large ISOs.
+        from phantom_ps2 import WINDOWS_EXE_LIMIT, compatible_game_launcher
+        try:
+            actual = compatible_game_launcher(exe)
             environment['PHANTOM_PACKAGE_PATH'] = str(exe.resolve())
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
+            if selected:
+                raise RuntimeError('Impossible de préparer le lanceur nécessaire à la carte sélectionnée : ' + str(exc)) from exc
+            if exe.stat().st_size >= WINDOWS_EXE_LIMIT:
+                raise
+            warning = ('The updated launcher could not be prepared. The game will use its original launcher; '
+                       'error reporting depends on that version.' if load_language() == 'en' else
+                       'Le lanceur à jour n’a pas pu être préparé. Le jeu va utiliser son lanceur d’origine ; '
+                       'les rapports d’erreur dépendront de sa version.')
+            messagebox.showwarning(tr('Fenêtre du jeu'), warning + '\n\n' + str(exc), parent=self.root)
         self.job = kernel32.CreateJobObjectW(None, None)
         if not self.job:
             raise OSError(ctypes.get_last_error(), 'Impossible de préparer la fenêtre du jeu.')

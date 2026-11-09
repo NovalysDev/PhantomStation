@@ -17,7 +17,8 @@ from phantom_portable import configure_portable_tools, local_ps1_dependencies, p
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 from phantom_intro import PhantomIntro
-from bibliotheque import register_game, discover_games
+from bibliotheque import register_game, discover_games, documents_folder
+from gestion_jeux import console_directory, games_in_directory, move_games
 from detection_doublons import find_duplicates
 from phantom_library_ui import LibraryView
 from phantom_compiler_game import GameInCompiler
@@ -53,13 +54,14 @@ configure_portable_tools(BASE)
 FRAMEWORK = BASE / 'psxrecomp'
 TOOLCHAIN = BASE / 'toolchain'
 PROJECTS = BASE / 'projets'
-DEFAULT_OUTPUT = BASE / 'Jeux en un fichier'
+DEFAULT_OUTPUT = documents_folder() / 'PhantomStation' / 'Jeux'
 DISC_FORMAT_HELP = {
     'PS1': 'PS1 : .cue, .bin ou .iso\nPlusieurs pistes : choisis le .cue et garde tous les .bin à côté.\nArchive .7z : extrais-la d’abord · .chd non pris en charge.',
     'PS2': 'PS2 : une image .iso par jeu\nArchive .7z : extrais-la d’abord pour obtenir l’ISO.\nLe format .chd n’est pas pris en charge.',
     'NES': 'NES : une cartouche .nes par jeu.\nArchive .7z : extrais-la d’abord.\nCompatibilité et réglages à vérifier selon le jeu.',
     'SNES': 'Super Nintendo : une cartouche .sfc ou .smc par jeu.\nArchive .7z : extrais-la d’abord.\nCompatibilité et réglages à vérifier selon le jeu.',
     'N64': 'Nintendo 64 : fichiers .z64, .v64 ou .n64.\nMoteur hybride expérimental : la compatibilité dépend du jeu.',
+    'DC': 'Dreamcast : fichier .chd. Mode expérimental : certains jeux peuvent ne pas fonctionner.',
 }
 SETTINGS_FILE = Path(os.environ.get('LOCALAPPDATA') or (Path.home() / 'AppData' / 'Local')) / 'PhantomStation' / 'compilateur.json'
 NOTICE_FILE = SETTINGS_FILE.parent / 'utilisation-responsable.json'
@@ -304,11 +306,17 @@ def load_output_directory():
 
 def save_output_directory(directory):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        settings = json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
+        if not isinstance(settings, dict): settings = {}
+    except (OSError, ValueError):
+        settings = {}
+    settings['dossier_jeux'] = str(directory)
     tmp = None
     try:
         with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=SETTINGS_FILE.parent, delete=False) as f:
             tmp = Path(f.name)
-            json.dump({'dossier_jeux': str(directory)}, f, ensure_ascii=False, indent=2)
+            json.dump(settings, f, ensure_ascii=False, indent=2)
         os.replace(tmp, SETTINGS_FILE)
     finally:
         if tmp is not None:
@@ -616,11 +624,12 @@ class App:
         self.background_path = None
         self.output_dir = load_output_directory()
         self.busy = False
+        self.moving_games = False
         self.last_ps2_output = None
         self.last_output_by_console = {}
         self.console_active = 'PS1'
         self.console_drafts = {}
-        self.players_by_console = {'PS1': '1', 'PS2': '2', 'NES': '2', 'SNES': '2', 'N64': '4'}
+        self.players_by_console = {'PS1': '1', 'PS2': '2', 'NES': '2', 'SNES': '2', 'N64': '4', 'DC': '1'}
         self.current_page = 'creation'
 
         self.hero = HeroBanner(root)
@@ -632,11 +641,11 @@ class App:
         sidebar.pack_propagate(False)
         ctk.CTkLabel(sidebar, text=tr('TON ESPACE'), text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x', padx=18, pady=(21, 10))
         self.nav_buttons = {}
-        for key, title in [('creation', '◈   Compilation'), ('library', '▦   Jeux'), ('guide', '?   Mode d’emploi')]:
+        for key, title in [('creation', '◈   Compilation'), ('library', '▦   Jeux'), ('settings', '⚙   Paramètres'), ('guide', '?   Mode d’emploi')]:
             nav = button(sidebar, title, lambda k=key: self.select_navigation(k), width=152, anchor='w')
             nav.pack(fill='x', padx=12, pady=4)
             self.nav_buttons[key] = nav
-        ctk.CTkLabel(sidebar, text='PLAYSTATION  /  NINTENDO', text_color='#6d829b', font=('Segoe UI', 9, 'bold'), anchor='w').pack(side='bottom', fill='x', padx=19, pady=(0, 20))
+        ctk.CTkLabel(sidebar, text='PLAYSTATION  /  NINTENDO  /  SEGA', text_color='#6d829b', font=('Segoe UI', 9, 'bold'), anchor='w').pack(side='bottom', fill='x', padx=19, pady=(0, 20))
         language_area = ctk.CTkFrame(sidebar, fg_color='transparent')
         language_area.pack(side='bottom', fill='x', padx=13, pady=(0, 14))
         ctk.CTkLabel(language_area, text='LANGUE / LANGUAGE', text_color='#6d829b', font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x', pady=(0, 4))
@@ -650,9 +659,22 @@ class App:
         self.content.pack(side='left', fill='both', expand=True)
         self.pages = {}
         creation = ctk.CTkFrame(self.content, fg_color='transparent')
-        self.library = LibraryView(self.content, lambda: self.output_dir, self.select_output_directory, self.open_compiled_game)
+        self.library = LibraryView(self.content, lambda: self.output_dir, play_game=self.open_compiled_game,
+                                   operation_active=lambda: self.moving_games)
         guide = ctk.CTkFrame(self.content, fg_color='transparent')
-        self.pages.update(creation=creation, library=self.library, guide=guide)
+        settings = ctk.CTkFrame(self.content, fg_color='transparent')
+        self.pages.update(creation=creation, library=self.library, guide=guide, settings=settings)
+
+        ctk.CTkLabel(settings, text=tr('TON ESPACE'), text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x')
+        ctk.CTkLabel(settings, text=tr('Paramètres'), text_color=TEXT, font=('Segoe UI', 25, 'bold'), anchor='w').pack(fill='x', pady=(0, 12))
+        storage = panel(settings); storage.pack(fill='x')
+        storage_body = ctk.CTkFrame(storage, fg_color='transparent'); storage_body.pack(fill='x', padx=18, pady=18)
+        ctk.CTkLabel(storage_body, text=tr('Dossier des jeux'), text_color=TEXT, font=('Segoe UI', 16, 'bold'), anchor='w').pack(fill='x')
+        ctk.CTkLabel(storage_body, text=tr('Un sous-dossier est créé automatiquement pour chaque console.'), text_color=MUTED, font=('Segoe UI', 11), anchor='w').pack(fill='x', pady=(4, 8))
+        self.settings_output_text = tk.StringVar(value=str(self.output_dir))
+        ctk.CTkLabel(storage_body, textvariable=self.settings_output_text, text_color=TEXT, font=('Segoe UI', 11), anchor='w', wraplength=650).pack(fill='x', pady=(0, 8))
+        self.settings_folder_button = button(storage_body, 'Changer le dossier des jeux', self.select_output_directory, width=210)
+        self.settings_folder_button.pack(anchor='w')
 
         title = ctk.CTkFrame(creation, fg_color='transparent')
         title.pack(fill='x', pady=(0, 10))
@@ -660,7 +682,7 @@ class App:
         console_area = ctk.CTkFrame(title, fg_color='transparent')
         console_area.pack(side='right', anchor='ne', padx=(10, 2))
         ctk.CTkLabel(console_area, text='CONSOLE', text_color='#6ddbe9', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x')
-        self.console_switch = ctk.CTkSegmentedButton(console_area, values=['PS1', 'PS2', 'NES', 'SNES', 'N64'], variable=self.console,
+        self.console_switch = ctk.CTkSegmentedButton(console_area, values=['PS1', 'PS2', 'NES', 'SNES', 'N64', 'DC'], variable=self.console,
             command=self.change_console, selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
             unselected_color='#20334b', unselected_hover_color='#31516b', width=260)
         self.console_switch.pack(pady=(3, 0))
@@ -707,10 +729,9 @@ class App:
         self.options_hint = tk.StringVar(value='')
         ctk.CTkLabel(r, textvariable=self.options_hint, text_color=MUTED, font=('Segoe UI', 10), anchor='w', justify='left', wraplength=330).pack(fill='x', pady=(0, 4))
         destination = ctk.CTkFrame(r, fg_color='transparent'); destination.pack(fill='x')
-        self.output_button = button(destination, 'Dossier des jeux', self.select_output_directory, width=140)
+        self.output_button = button(destination, 'Ouvrir le dossier de la console', self.open_packages, width=180)
         self.output_button.pack(side='left', fill='x', expand=True)
-        button(destination, 'Ouvrir', self.open_packages, width=70).pack(side='left', padx=(7, 0))
-        self.output_text = tk.StringVar(value=tr('Dossier : ') + str(self.output_dir))
+        self.output_text = tk.StringVar(value=tr('Dossier : ') + str(console_directory(self.output_dir, 'PS1')))
         ctk.CTkLabel(r, textvariable=self.output_text, text_color=MUTED, font=('Segoe UI', 10), anchor='w', wraplength=350, justify='left', height=19).pack(fill='x', pady=(4, 4))
         artwork = ctk.CTkFrame(r, fg_color='transparent'); artwork.pack(fill='x')
         self.icon_button = button(artwork, 'Choisir la jaquette', self.select_icon, width=120)
@@ -755,7 +776,9 @@ NES : sélectionne une cartouche .nes. Super Nintendo : sélectionne une cartouc
 
 N64 : sélectionne une cartouche .z64, .v64 ou .n64. GoldenEye 007 Europe utilise un portage natif adapté. Les autres cartouches utilisent un moteur commun expérimental : certaines parties restent interprétées et certains jeux peuvent ne pas fonctionner. Les réglages et commandes s'ouvrent avec F10 pendant le jeu.
 
-Pour toutes les consoles : une archive .7z doit d’abord être extraite, par exemple avec 7-Zip ; sélectionne ensuite le fichier de jeu extrait. Le format .chd n’est pas pris en charge par le compilateur.
+Dreamcast : sélectionne un fichier .chd. La création d’autres jeux est expérimentale : ils peuvent ne pas démarrer ou présenter des problèmes. L’image, le son et les sauvegardes restent à vérifier. Les codes et la configuration des commandes ne sont pas encore disponibles.
+
+Pour toutes les consoles : une archive .7z doit d’abord être extraite, par exemple avec 7-Zip ; sélectionne ensuite le fichier de jeu extrait. Le format .chd est accepté uniquement par le prototype Dreamcast.
 
 Dans les jeux NES et Super Nintendo, F2 ouvre les réglages et les commandes, F3 change le filtre d’image, F8 sauvegarde rapidement et F9 recharge. Les codes et les autres options ne sont pas encore identiques à ceux des jeux PlayStation.
 
@@ -771,11 +794,11 @@ Choisis d’abord PS1 ou PS2. En PS2, sélectionne une seule image ISO : le mote
 
 Si un disque est répertorié comme nécessitant un SBI, PhantomStation le cherche automatiquement. Si la recherche échoue, le jeu est quand même créé et un avertissement apparaît. Dans son lanceur, sélectionne le disque concerné et utilise « Ajouter le fichier SBI » avec le fichier correspondant. Le bouton n’apparaît que lorsque le fichier est manquant. Les fichiers ajoutés sont stockés dans les données extraites du jeu, sans modifier les images d’origine. Selon la version, le format peut être contrôlé sans que la correspondance exacte puisse être garantie.
 
-5. Choisis le dossier où enregistrer tes jeux, puis clique sur « Créer le programme ». L’EXE unique est créé automatiquement. La première compilation peut prendre du temps et nécessiter Internet. Suis sa progression dans le journal.
+5. Clique sur « Créer le programme ». Le jeu est enregistré dans le sous-dossier de sa console, dans Documents/PhantomStation/Jeux par défaut. Pour changer le dossier commun, ouvre les paramètres du compilateur. L’EXE unique est créé automatiquement. La première compilation peut prendre du temps et nécessiter Internet. Suis sa progression dans le journal.
 
 6. Une fois la création terminée, clique sur « Terminé » : tu peux choisir de créer un raccourci sur le bureau et de déplacer les dossiers d’images d’origine dans la Corbeille. Le contenu des dossiers est affiché avant confirmation. Sinon, clique sur « Ouvrir le dossier des jeux », puis ouvre le fichier EXE créé. Dans le lanceur du jeu, règle si besoin les manettes et la vidéo, puis clique sur « Jouer ». L’introduction apparaît dans la fenêtre du jeu.
 
-L’onglet « Bibliothèque » retrouve les jeux dans le dossier choisi et permet d’en ajouter depuis un autre dossier. Pour chaque jeu, « Sauvegardes » ouvre le dossier des parties et permet de créer ou restaurer une copie de secours. Une copie est créée avant chaque lancement depuis la bibliothèque lorsque des sauvegardes existent. Ferme le jeu avant de copier ou restaurer ses sauvegardes. Les emplacements personnalisés choisis dans le lanceur du jeu ne sont pas suivis automatiquement.
+L’onglet « Jeux » retrouve les jeux dans le dossier choisi et permet d’en ajouter depuis un autre dossier. Le bouton « Supprimer » envoie le fichier du jeu dans la Corbeille sans supprimer ses sauvegardes. Pour chaque console, la liste « Carte mémoire » permet de garder la sauvegarde actuelle du jeu ou de sélectionner une carte partagée ; « + » crée une carte vierge ou importe une carte existante : choisis le nom affiché dans PhantomStation. Le bouton « Renommer » permet de le changer sans modifier le contenu de la carte. Les consoles PS1 et PS2 disposent de deux listes, une par emplacement. Les anciens jeux PS1 et les anciens jeux PS2 qui utilisent une deuxième carte doivent être recréés pour utiliser ces choix dans la bibliothèque. Le moteur Dreamcast actuel ne gère qu’une seule carte. Sur Nintendo, « + » crée un profil dont les fichiers sont séparés pour chaque jeu. Ce choix s’applique aux jeux lancés depuis la bibliothèque. Pour chaque jeu, « Sauvegardes » ouvre le dossier des parties et permet de créer ou restaurer une copie de secours. Une copie est créée avant chaque lancement depuis la bibliothèque lorsque des sauvegardes existent, y compris pour chaque carte partagée sélectionnée. Ferme le jeu avant de copier ou restaurer ses sauvegardes. Les emplacements personnalisés choisis dans le lanceur du jeu ne sont pas suivis automatiquement.
 
 Une manette compatible détectée est proposée automatiquement au joueur 1. Tu peux choisir une autre manette ou le clavier et modifier les touches ; les autres joueurs gardent leurs propres affectations. PhantomStation inclut des profils de manettes, mais la manette doit aussi être reconnue par Windows.
 
@@ -824,7 +847,9 @@ PS2: select one .iso image. BIN/CUE images are not supported for PS2. Large disc
 
 NES: select a .nes cartridge. Super Nintendo: select a .sfc or .smc cartridge. Nintendo 64: select a .z64, .v64 or .n64 cartridge. Compatibility depends on the game and region; these engines are experimental.
 
-Extract .7z archives first. CHD files are not currently supported.
+Dreamcast: select a .chd file. Builds for other games are experimental: they may not start or may have issues. Graphics, audio and saves need testing. Cheats and control remapping are not available yet.
+
+Extract .7z archives first. CHD is supported only by the Dreamcast prototype.
 
 1. Select a console and add the game image or disc files. The suggested game name can be edited. Choose the number of players supported by the game and console.
 
@@ -832,7 +857,7 @@ Extract .7z archives first. CHD files are not currently supported.
 
 3. Wait for the build to finish. You can create a desktop shortcut and choose whether to move the original images to the Recycle Bin. Test the game before deleting your originals.
 
-The library groups games by console and lets you launch or rename them, manage saves and restore backups. A backup of changed saves is made before launching from the library.
+The library groups games by console and lets you launch, rename or move them to the Recycle Bin, manage saves and restore backups. New games are stored in a console subfolder under Documents/PhantomStation/Jeux by default. Change the shared folder in Settings; you can move existing games when changing it. A backup of changed saves is made before launching from the library.
 
 For PS1 games needing an SBI file, PhantomStation searches automatically. If none is found, the game is created and a warning explains how to add it in the game launcher.
 
@@ -863,7 +888,7 @@ The selected interface language does not translate the game itself: the game lan
         self.retranslate_widgets(self.root)
         self.root.title(tr(self.root.title()))
         self.disc_help.set(tr(DISC_FORMAT_HELP.get(self.console.get(), DISC_FORMAT_HELP['PS1'])))
-        self.output_text.set(tr('Dossier : ') + str(self.output_dir))
+        self.output_text.set(tr('Dossier : ') + str(console_directory(self.output_dir, self.console.get())))
         self.refresh_discs()
         self.options_hint.set(tr('Nombre maximal de manettes ; le jeu choisit son mode multijoueur.') if self.console.get() != 'PS1' else '')
         self.update_guide()
@@ -921,13 +946,14 @@ The selected interface language does not translate the game itself: the game lan
             self.icon_text.set(tr('Jaquette automatique si disponible') if not self.icon_path else tr('Image choisie : ') + Path(self.icon_path).name)
             self.refresh_discs()
         is_ps1 = value == 'PS1'
-        limit = 5 if value == 'SNES' else 4 if value in ('PS1', 'N64') else 2
+        limit = 1 if value == 'DC' else 5 if value == 'SNES' else 4 if value in ('PS1', 'N64') else 2
         self.players_box.configure(values=[str(n) for n in range(1, limit + 1)])
         self.disc_help.set(tr(DISC_FORMAT_HELP.get(value, DISC_FORMAT_HELP['PS1'])))
         self.players_box.configure(state='readonly')
         self.resolution_box.configure(state='readonly' if is_ps1 else 'disabled')
         self.bios_box.configure(state='normal' if is_ps1 else 'disabled')
         self.options_hint.set(tr('Nombre maximal de manettes ; le jeu choisit son mode multijoueur.') if value != 'PS1' else '')
+        self.output_text.set(tr('Dossier : ') + str(console_directory(self.output_dir, value)))
         if update_status:
             self.status.set(tr('PS1 sélectionnée.') if is_ps1 else value + tr(' expérimental : réglages disponibles selon le jeu.'))
         self.update_navigation()
@@ -937,7 +963,7 @@ The selected interface language does not translate the game itself: the game lan
         platform = self.console.get()
         formats = {'PS1': ('Images PS1', '*.cue *.iso *.bin'), 'PS2': ('Image PS2', '*.iso'),
                    'NES': ('Cartouche NES', '*.nes'), 'SNES': ('Cartouche Super Nintendo', '*.sfc *.smc'),
-                   'N64': ('Cartouche Nintendo 64', '*.z64 *.v64 *.n64')}
+                   'N64': ('Cartouche Nintendo 64', '*.z64 *.v64 *.n64'), 'DC': ('Image Dreamcast', '*.chd')}
         options = {'title': 'Choisir le jeu', 'filetypes': [formats[platform], ('Tous les fichiers', '*.*')]}
         if self.discs:
             options['initialdir'] = str(Path(self.discs[-1]).parent)
@@ -1027,6 +1053,22 @@ The selected interface language does not translate the game itself: the game lan
             while True:
                 kind, value = self.events.get_nowait()
                 if kind == 'log': self.append(value)
+                elif kind == 'move_progress':
+                    index, total, name = value
+                    self.settings_output_text.set((f'Moving {index}/{total}: ' if load_language() == 'en' else f'Déplacement {index}/{total} : ') + name)
+                elif kind == 'move_done':
+                    new_folder, error = value
+                    self.busy = False
+                    self.moving_games = False
+                    self.root.protocol('WM_DELETE_WINDOW', self.root.destroy)
+                    self.settings_folder_button.configure(state='normal')
+                    self.start.configure(state='normal')
+                    if error:
+                        self.settings_output_text.set(str(self.output_dir))
+                        self.library.refresh()
+                        messagebox.showerror(tr('Déplacement interrompu'), str(error) + tr('\nLes jeux déjà déplacés restent accessibles dans la bibliothèque.'), parent=self.root)
+                    else:
+                        self.finish_output_directory_change(new_folder)
                 elif kind == 'phase':
                     if self.progress_window:
                         self.progress_window.set_phase(value)
@@ -1074,9 +1116,16 @@ The selected interface language does not translate the game itself: the game lan
                        self.output_button, self.icon_button, self.background_button):
             button.configure(state='normal')
         self.console_switch.configure(state='normal')
+        game, self.finished_game = self.finished_game, None
+        if game:
+            # Start the next compilation with a fresh selection, even when the
+            # previous title was edited manually. Image cleanup uses its own
+            # snapshot below; the original files are not removed here.
+            self.discs.clear()
+            self.name.set('')
+            self.suggested_name = ''
         self.change_console(self.console.get(), update_status=False)
         self.refresh_discs()
-        game, self.finished_game = self.finished_game, None
         missing, self.finished_missing_sbi = self.finished_missing_sbi, []
         if game and missing:
             messagebox.showwarning(tr('Fichier SBI manquant'),
@@ -1167,9 +1216,9 @@ The selected interface language does not translate the game itself: the game lan
         self.root.withdraw()
         try:
             console = self.console.get()
-            console_sound = {'PS2': 'son-demarrage-ps2.wav', 'NES': 'son-demarrage-nes.wav',
+            console_sound = {'DC': 'son-demarrage-dreamcast.wav', 'PS2': 'son-demarrage-ps2.wav', 'NES': 'son-demarrage-nes.wav',
                              'SNES': 'son-demarrage-snes.wav', 'N64': 'son-demarrage-n64.wav'}
-            console_logo = {'PS2': 'logo-ps2.png', 'NES': 'logo-nes.png',
+            console_logo = {'DC': 'logo-dreamcast.png', 'PS2': 'logo-ps2.png', 'NES': 'logo-nes.png',
                             'SNES': 'logo-snes.png', 'N64': 'logo-n64.png'}
             self.progress_window = PhantomIntro(self.root, message, on_finish=self.operation_finished, progress=True,
                                                 on_hide=lambda: self.status.set('Compilation en cours : fenêtre de progression réduite.'),
@@ -1246,22 +1295,78 @@ The selected interface language does not translate the game itself: the game lan
             self.status.set(tr('Projet sélectionné : ') + self.project.name)
 
     def select_output_directory(self):
+        if self.busy:
+            messagebox.showinfo(tr('Dossier des jeux'), tr('Attends la fin de l’opération en cours.'), parent=self.root)
+            return
         initial = self.output_dir if self.output_dir.is_dir() else BASE
         folder = filedialog.askdirectory(title=tr('Choisir le dossier des jeux compilés'), initialdir=str(initial), mustexist=True)
         if not folder:
             return
-        self.output_dir = Path(folder).resolve()
-        self.output_text.set(tr('Dossier des jeux : ') + str(self.output_dir))
-        self.library.refresh()
+        new_folder = Path(folder).resolve()
+        if new_folder == self.output_dir.resolve(): return
         try:
-            save_output_directory(self.output_dir)
+            games = games_in_directory(self.output_dir)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(tr('Dossier inaccessible'), str(exc), parent=self.root)
+            return
+        if games:
+            question = (f'Move the {len(games)} existing game(s) to the new folder? Saved games stay where they are.'
+                        if load_language() == 'en' else
+                        f'Déplacer les {len(games)} jeu(x) existant(s) vers le nouveau dossier ? Les sauvegardes restent à leur emplacement.')
+            choice = messagebox.askyesnocancel(tr('Déplacer les jeux'), question, parent=self.root)
+            if choice is None: return
+            if choice:
+                self.busy = True
+                self.moving_games = True
+                self.settings_folder_button.configure(state='disabled')
+                self.start.configure(state='disabled')
+                self.root.protocol('WM_DELETE_WINDOW', lambda: messagebox.showinfo(tr('Déplacement en cours'), tr('Attends la fin du déplacement des jeux.'), parent=self.root))
+                old_folder = self.output_dir
+                def transfer():
+                    try:
+                        move_games(games, old_folder, new_folder,
+                                   progress=lambda index, total, name: self.events.put(('move_progress', (index, total, name))))
+                        self.events.put(('move_done', (new_folder, None)))
+                    except Exception as exc:
+                        self.events.put(('move_done', (new_folder, exc)))
+                threading.Thread(target=transfer, daemon=True).start()
+                return
+            try:
+                for game in games: register_game(game['path'])
+            except OSError as exc:
+                messagebox.showerror(tr('Dossier non mémorisé'), str(exc), parent=self.root)
+                return
+        self.finish_output_directory_change(new_folder)
+
+    def finish_output_directory_change(self, new_folder):
+        old_folder = self.output_dir.resolve()
+        try:
+            save_output_directory(new_folder)
         except OSError as exc:
-            messagebox.showwarning(tr('Dossier non mémorisé'), 'Le dossier est utilisé pour cette session, mais n’a pas pu être mémorisé :\n' + str(exc))
+            messagebox.showerror(tr('Dossier non mémorisé'), str(exc), parent=self.root)
+            self.settings_output_text.set(str(self.output_dir))
+            self.library.refresh()
+            return
+        self.output_dir = Path(new_folder)
+        for console, previous in list(self.last_output_by_console.items()):
+            previous = Path(previous)
+            if previous.is_relative_to(old_folder) and not previous.exists():
+                replacement = console_directory(self.output_dir, console) / previous.name
+                if replacement.is_file(): self.last_output_by_console[console] = replacement
+        if self.last_ps2_output:
+            previous = Path(self.last_ps2_output)
+            if previous.is_relative_to(old_folder) and not previous.exists():
+                matches = [Path(p) for p in self.last_output_by_console.values() if Path(p).name == previous.name and Path(p).is_file()]
+                if len(matches) == 1: self.last_ps2_output = matches[0]
+        self.settings_output_text.set(str(self.output_dir))
+        self.output_text.set(tr('Dossier : ') + str(console_directory(self.output_dir, self.console.get())))
+        self.library.refresh()
 
     def open_packages(self):
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(self.output_dir))
+            folder = console_directory(self.output_dir, self.console.get())
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))
         except OSError as exc:
             messagebox.showerror(tr('Dossier inaccessible'), str(exc))
 
@@ -1291,6 +1396,9 @@ The selected interface language does not translate the game itself: the game lan
         if self.console.get() == 'PS2':
             self.start_ps2_build()
             return
+        if self.console.get() == 'DC':
+            self.start_dreamcast_build()
+            return
         if self.console.get() in ('NES', 'SNES', 'N64'):
             self.start_nintendo_build()
             return
@@ -1306,9 +1414,10 @@ The selected interface language does not translate the game itself: the game lan
             return
         if not self.confirm_existing_game('PS1', name):
             return
+        output_dir = console_directory(self.output_dir, 'PS1')
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryFile(dir=self.output_dir):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=output_dir):
                 pass
         except OSError as exc:
             messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
@@ -1336,7 +1445,7 @@ The selected interface language does not translate the game itself: the game lan
         self.console_switch.configure(state='disabled')
         self.status.set(tr('Compilation en cours…'))
         self.show_progress('Préparation du projet…')
-        threading.Thread(target=self.worker, args=(name, slug, list(self.discs), self.players.get(), self.resolution.get(), self.icon_path, self.phantom_bios.get(), self.background_path, self.output_dir), daemon=True).start()
+        threading.Thread(target=self.worker, args=(name, slug, list(self.discs), self.players.get(), self.resolution.get(), self.icon_path, self.phantom_bios.get(), self.background_path, output_dir), daemon=True).start()
 
     def start_ps2_build(self):
         if len(self.discs) != 1 or Path(self.discs[0]).suffix.lower() != '.iso':
@@ -1367,9 +1476,10 @@ The selected interface language does not translate the game itself: the game lan
             except (OSError, ValueError, EOFError, wave.Error) as exc:
                 messagebox.showerror(tr('Son PS2 invalide'), 'Impossible d’utiliser ce fichier WAV :\n' + str(exc))
                 return
+        output_dir = console_directory(self.output_dir, 'PS2')
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryFile(dir=self.output_dir): pass
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=output_dir): pass
         except OSError as exc:
             messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
             return
@@ -1383,7 +1493,69 @@ The selected interface language does not translate the game itself: the game lan
             control.configure(state='disabled')
         self.status.set(tr('Compilation PS2 en cours…'))
         self.show_progress('Préparation du projet PS2…')
-        threading.Thread(target=self.worker_ps2, args=(name, slug, self.discs[0], self.icon_path, self.output_dir, self.background_path, self.players.get()), daemon=True).start()
+        threading.Thread(target=self.worker_ps2, args=(name, slug, self.discs[0], self.icon_path, output_dir, self.background_path, self.players.get()), daemon=True).start()
+
+    def start_dreamcast_build(self):
+        if len(self.discs) != 1 or Path(self.discs[0]).suffix.lower() != '.chd':
+            messagebox.showwarning('Image Dreamcast', 'Sélectionne une seule image Dreamcast au format CHD.')
+            return
+        name = self.name.get().strip()
+        if not name:
+            messagebox.showwarning(tr('Nom'), tr('Indique le nom du jeu.'))
+            return
+        if not self.confirm_existing_game('DC', name):
+            return
+        output_dir = console_directory(self.output_dir, 'DC')
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=output_dir): pass
+        except OSError as exc:
+            messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
+            return
+        self.busy = True
+        for control in (self.start, self.choose, self.disc_remove, self.disc_clear, self.launch_button,
+                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch):
+            control.configure(state='disabled')
+        self.status.set('Compilation Dreamcast expérimentale en cours…')
+        self.show_progress('Préparation du jeu Dreamcast…')
+        threading.Thread(target=self.worker_dreamcast, args=(name, self.discs[0], self.icon_path, output_dir, self.background_path), daemon=True).start()
+
+    def worker_dreamcast(self, name, image, icon_path, output, background):
+        try:
+            self.events.put(('phase', 'Création et génération Dreamcast…'))
+            command = [sys.executable, '-u', str(BASE / 'phantom_dreamcast.py'), '--rom', image, '--nom', name, '--sortie', str(output)]
+            if icon_path: command += ['--icone', str(icon_path)]
+            if background: command += ['--fond', str(background)]
+            env = os.environ.copy(); env['PYTHONUTF8'] = '1'
+            proc = subprocess.Popen(command, cwd=str(BASE), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace', env=env, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = None
+            for line in proc.stdout:
+                if line.startswith('PHANTOM_DREAMCAST_RESULT='):
+                    result = Path(line.split('=', 1)[1].strip())
+                else:
+                    self.events.put(('log', line))
+                    count = re.match(r'^\s*\[(\d+)\s*/\s*(\d+)\]', line)
+                    if count:
+                        self.events.put(('progress', (int(count.group(1)), int(count.group(2)), 'Compilation Windows')))
+                    if 'Création et vérification du fichier unique' in line:
+                        self.events.put(('phase', 'Création du fichier unique…'))
+            if proc.wait() or not result or not result.is_file():
+                raise RuntimeError('La compilation Dreamcast a échoué ; consulte le journal.')
+            from bibliotheque import game_info
+            if game_info(result)['platform'] != 'DC':
+                raise RuntimeError('La vérification du jeu Dreamcast a échoué.')
+            self.last_output_by_console['DC'] = result
+            try: register_game(result)
+            except OSError as exc: self.events.put(('log', 'Bibliothèque non mise à jour : ' + str(exc) + '\n'))
+            try: images = original_image_snapshot([image], [], BASE / 'descripteurs')
+            except (OSError, ValueError): images = []
+            state = result.stat()
+            self.events.put(('done', (True, 'Prototype Dreamcast créé — fonctionnement encore expérimental.', str(result), images,
+                                      (state.st_size, state.st_mtime_ns, state.st_ino))))
+        except Exception as exc:
+            self.events.put(('log', '\nERREUR Dreamcast : ' + str(exc) + '\n'))
+            self.events.put(('done', (False, 'Échec de la compilation Dreamcast — voir le journal.', None, [], None)))
 
     def start_nintendo_build(self):
         console = self.console.get()
@@ -1397,9 +1569,10 @@ The selected interface language does not translate the game itself: the game lan
             return
         if not self.confirm_existing_game(console, name):
             return
+        output_dir = console_directory(self.output_dir, console)
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryFile(dir=self.output_dir): pass
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=output_dir): pass
         except OSError as exc:
             messagebox.showerror(tr('Dossier inaccessible'), 'Impossible d’écrire dans le dossier des jeux :\n' + str(exc))
             return
@@ -1409,7 +1582,7 @@ The selected interface language does not translate the game itself: the game lan
             control.configure(state='disabled')
         self.status.set('Compilation ' + console + ' en cours…')
         self.show_progress('Préparation du jeu ' + console + '…')
-        threading.Thread(target=self.worker_nintendo, args=(console, name, self.discs[0], self.icon_path, self.output_dir, self.background_path, self.players.get()), daemon=True).start()
+        threading.Thread(target=self.worker_nintendo, args=(console, name, self.discs[0], self.icon_path, output_dir, self.background_path, self.players.get()), daemon=True).start()
 
     def worker_nintendo(self, console, name, image, icon_path, output, background, players=None):
         try:
@@ -1512,6 +1685,12 @@ The selected interface language does not translate the game itself: the game lan
         protected = list(selected) + [output_dir]
         protected += [p for p in (icon_path, background_path) if p]
         try:
+            try:
+                import erreurs_connues as apprentissage
+                for ligne in apprentissage.preparer('PS1', selected[0] if selected else None, name):
+                    self.events.put(('log', ligne + '\n'))
+            except Exception:
+                pass
             env = build_environment()
             env['PHANTOM_BUILD_TOKEN'] = token
             cues = []

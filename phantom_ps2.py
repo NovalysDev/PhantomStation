@@ -1,5 +1,5 @@
 """Construction et emballage expérimental d'un jeu PS2 dans PhantomStation."""
-import base64, hashlib, io, json, os, re, shutil, struct, subprocess, tempfile, threading, time, urllib.parse, urllib.request, uuid, zipfile
+import base64, hashlib, io, json, os, re, shutil, struct, subprocess, tempfile, threading, time, tomllib, urllib.parse, urllib.request, uuid, zipfile
 from pathlib import Path
 from PIL import Image
 from emballer import _decode_cover
@@ -8,6 +8,71 @@ BASE = Path(__file__).resolve().parent
 ENGINE = BASE / 'ps2-native-recomp'
 PYTHON = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Microsoft.NET' / 'Framework64' / 'v4.0.30319' / 'csc.exe'
 WINDOWS_EXE_LIMIT = 1 << 32  # CreateProcess rejects files of 4 GiB or larger.
+
+
+def _extract_windows_icon(source, destination):
+    """Preserve every original icon resolution from a Windows launcher."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+    kernel.LoadLibraryExW.restype = wintypes.HMODULE
+    kernel.FreeLibrary.argtypes = [wintypes.HMODULE]
+    kernel.FindResourceW.argtypes = [wintypes.HMODULE, ctypes.c_void_p, ctypes.c_void_p]
+    kernel.FindResourceW.restype = wintypes.HANDLE
+    kernel.SizeofResource.argtypes = [wintypes.HMODULE, wintypes.HANDLE]
+    kernel.SizeofResource.restype = wintypes.DWORD
+    kernel.LoadResource.argtypes = [wintypes.HMODULE, wintypes.HANDLE]
+    kernel.LoadResource.restype = wintypes.HANDLE
+    kernel.LockResource.argtypes = [wintypes.HANDLE]
+    kernel.LockResource.restype = ctypes.c_void_p
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMODULE, ctypes.c_void_p,
+                                      ctypes.c_void_p, ctypes.c_ssize_t)
+    kernel.EnumResourceNamesW.argtypes = [wintypes.HMODULE, ctypes.c_void_p, callback_type, ctypes.c_ssize_t]
+    kernel.EnumResourceNamesW.restype = wintypes.BOOL
+    module = kernel.LoadLibraryExW(str(source), None, 0x00000002 | 0x00000020)
+    if not module:
+        raise OSError(ctypes.get_last_error(), 'Impossible de lire l’icône du jeu.')
+    try:
+        names = []
+        @callback_type
+        def collect(_module, _type, name, _param):
+            value = int(name or 0)
+            names.append(value if value <= 0xffff else ctypes.wstring_at(value))
+            return False
+        kernel.EnumResourceNamesW(module, ctypes.c_void_p(14), collect, 0)
+        if not names:
+            raise ValueError('Icône du jeu absente.')
+
+        def resource(kind, name):
+            name_buffer = ctypes.create_unicode_buffer(name) if isinstance(name, str) else None
+            name_ptr = ctypes.cast(name_buffer, ctypes.c_void_p) if name_buffer is not None else ctypes.c_void_p(name)
+            found = kernel.FindResourceW(module, name_ptr, ctypes.c_void_p(kind))
+            size = kernel.SizeofResource(module, found) if found else 0
+            loaded = kernel.LoadResource(module, found) if size else None
+            address = kernel.LockResource(loaded) if loaded else None
+            if not address or size > 8 * 1024 * 1024:
+                raise ValueError('Icône du jeu invalide.')
+            return ctypes.string_at(address, size)
+
+        group = resource(14, names[0])
+        if len(group) < 6:
+            raise ValueError('Icône du jeu incomplète.')
+        reserved, kind, count = struct.unpack_from('<HHH', group)
+        if reserved or kind != 1 or not 0 < count <= 64 or len(group) < 6 + 14 * count:
+            raise ValueError('Icône du jeu invalide.')
+        entries, images, offset = [], [], 6 + 16 * count
+        for index in range(count):
+            width, height, colors, zero, planes, bits, size, ident = struct.unpack_from('<BBBBHHIH', group, 6 + 14 * index)
+            image = resource(3, ident)
+            if len(image) != size:
+                raise ValueError('Image de l’icône incomplète.')
+            entries.append(struct.pack('<BBBBHHII', width, height, colors, zero, planes, bits, size, offset))
+            images.append(image)
+            offset += size
+        Path(destination).write_bytes(struct.pack('<HHH', 0, 1, count) + b''.join(entries) + b''.join(images))
+    finally:
+        kernel.FreeLibrary(module)
 
 
 def windows_environment():
@@ -19,6 +84,12 @@ def windows_environment():
     env['PS2_JOBS'] = '4'
     env['PS2_AVX2'] = '0'
     return env
+
+
+def learn_cache_root():
+    """What exploring and playing found per disc, kept between compilations (scripts/learn_cache.py in the engine)."""
+    local = os.environ.get('LOCALAPPDATA') or str(Path.home() / 'AppData' / 'Local')
+    return Path(local) / 'PhantomStation' / 'PS2-apprentissage'
 
 
 def bash_path(path):
@@ -54,6 +125,12 @@ def run_command(command, env, log, progress=None, ninja_log=None):
 
 def build_ps2(name, slug, iso, log, progress=None):
     iso = Path(iso).resolve(strict=True)
+    try:
+        import erreurs_connues as apprentissage
+        for ligne in apprentissage.preparer('PS2', iso, name):
+            log(ligne + '\n')
+    except Exception:
+        pass
     if iso.suffix.lower() != '.iso' or not iso.is_file(): raise ValueError('Choisis une image ISO PS2 valide.')
     bash = ENGINE / 'tools/portable/mingit/usr/bin/bash.exe'
     portable_setup = ENGINE / 'scripts/portable.ps1'
@@ -67,6 +144,8 @@ def build_ps2(name, slug, iso, log, progress=None):
     if not all(path.is_file() for path in probes): raise RuntimeError('Les outils PS2 n’ont pas pu être installés.')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,60}', slug): raise ValueError('Nom de projet PS2 invalide.')
     env = windows_environment()
+    # A disc compiled again starts from what was found the last times, and from what playing it met.
+    env['PS2_LEARN_CACHE'] = learn_cache_root().as_posix()
     if not (ENGINE / 'build/tools/eerecomp.exe').is_file():
         log('Préparation du moteur et des bibliothèques PS2…\n')
         run_command([str(bash), 'scripts/setup.sh', '--native-only'], env, log)
@@ -283,7 +362,7 @@ def build_stub(icon, output, temp, background=None):
     if background:
         artwork = temp / 'fond.png'
         with Image.open(background) as chosen:
-            chosen.convert('RGB').save(artwork, format='PNG')
+            chosen.convert('RGB').save(artwork, format='PNG', optimize=True, compress_level=9)
     cmd = [str(PYTHON), '/nologo', '/target:winexe', '/out:' + str(output), '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll',
            '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll', '/win32icon:' + str(icon),
            '/resource:' + str(artwork) + ',art', '/resource:' + str(visible_logo) + ',logo',
@@ -299,6 +378,15 @@ def large_game_launcher(package):
     from bibliotheque import game_info
     if game_info(package, include_cover=False)['platform'] != 'PS2':
         raise ValueError('Ce jeu dépasse 4 Gio. L’ouverture des anciens fichiers volumineux est disponible pour les jeux PS2.')
+    return compatible_game_launcher(package)
+
+
+def compatible_game_launcher(package, compact=False):
+    """Run an existing package with the current launcher, without rewriting it."""
+    package = Path(package).resolve(strict=True)
+    from bibliotheque import game_info
+    platform = game_info(package, include_cover=False)['platform']
+    dc_profile = None
     before = package.stat()
     with tempfile.TemporaryDirectory(prefix='phantom-grand-jeu-') as td:
         work = Path(td)
@@ -309,15 +397,16 @@ def large_game_launcher(package):
             offset = min(entry.header_offset for entry in entries)
             if not 0 < offset < 64 * 1024 * 1024:
                 raise ValueError('Le lanceur de ce jeu est invalide.')
-            cover_entry = archive.getinfo('assets/img/boxart.png')
-            if cover_entry.file_size > 8 * 1024 * 1024:
-                raise ValueError('La jaquette du jeu est trop volumineuse.')
-            cover = _decode_cover(archive.read(cover_entry)).convert('RGBA')
-            cover.thumbnail((256, 256), Image.Resampling.LANCZOS)
-            square = Image.new('RGBA', (256, 256), (4, 10, 24, 255))
-            square.alpha_composite(cover, ((256-cover.width)//2, (256-cover.height)//2))
+            if platform == 'DC':
+                info = archive.getinfo('game.toml')
+                if info.file_size > 1024 * 1024:
+                    raise ValueError('Configuration du jeu trop volumineuse.')
+                config = tomllib.loads(archive.read(info).decode('utf-8-sig'))
+                # Builds made before profiles existed were Crazy Taxi only.
+                dc_profile = config.get('game', {}).get('profile', 'crazy_taxi_pal')
+                if dc_profile not in ('crazy_taxi_pal', 'generic_experimental', 'house_pal_experimental'):
+                    dc_profile = 'generic_experimental'
             icon = work / 'icone.ico'
-            square.save(icon, format='ICO', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
             old_stub = work / 'ancien-lanceur.exe'
             with package.open('rb') as original, old_stub.open('wb') as output:
                 left = offset
@@ -338,17 +427,59 @@ try { $s.CopyTo($f) } finally { $f.Dispose(); $s.Dispose() }'''
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
                                 env=env, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
         if result.returncode: raise OSError('Impossible de lire le fond du jeu.')
+        _extract_windows_icon(old_stub, icon)
+        if compact:
+            # PNG recompression preserves pixels and avoids rewriting the large
+            # archive when replacing an older, smaller launcher prefix.
+            from PIL import ImageChops
+            candidate = work / 'fond-optimise.png'
+            with Image.open(background) as original:
+                if original.format == 'PNG':
+                    kwargs = {'optimize': True, 'compress_level': 9}
+                    if original.info.get('icc_profile'):
+                        kwargs['icc_profile'] = original.info['icc_profile']
+                    if 'transparency' in original.info:
+                        kwargs['transparency'] = original.info['transparency']
+                    original.save(candidate, **kwargs)
+                    with Image.open(candidate) as optimized:
+                        if (candidate.stat().st_size < background.stat().st_size and
+                                ImageChops.difference(original.convert('RGBA'), optimized.convert('RGBA')).getbbox() is None):
+                            background = candidate
         digest = hashlib.sha256()
-        for item in (old_stub, icon, BASE/'unique_launcher.cs', BASE/'phantom_ps2_launcher.cs',
-                     BASE/'phantom_ps2_settings.cs', BASE/'phantom_embedded_game.cs',
-                     BASE/'assets/logo-ps2.png', BASE/'assets/son-demarrage-ps2.wav'):
+        digest.update(b'compact-v1' if compact else b'ordinary-v1')
+        if dc_profile is not None: digest.update(dc_profile.encode('ascii'))
+        inputs = [old_stub, icon, BASE/'unique_launcher.cs', BASE/'phantom_ps2.py', BASE/'emballer.py']
+        if platform == 'PS2':
+            inputs += [BASE/'phantom_ps2_launcher.cs', BASE/'phantom_ps2_settings.cs',
+                       BASE/'phantom_embedded_game.cs', BASE/'assets/logo-ps2.png', BASE/'assets/son-demarrage-ps2.wav']
+        elif platform in ('NES', 'SNES', 'N64'):
+            inputs += [BASE/'phantom_nintendo.py', BASE/'phantom_nintendo_launcher.cs', BASE/'phantom_goldeneye_profile.cs', BASE/'phantom_embedded_game.cs',
+                       BASE/'assets'/('logo-' + platform.lower() + '.png'), BASE/'assets'/('son-demarrage-' + platform.lower() + '.wav')]
+        elif platform == 'DC':
+            inputs += [BASE/'phantom_dreamcast.py', BASE/'phantom_dreamcast_launcher.cs', BASE/'phantom_dreamcast_vmu.cs', BASE/'phantom_embedded_game.cs',
+                       BASE/'assets/logo-dreamcast.png', BASE/'assets/son-demarrage-dreamcast.wav']
+        else:
+            inputs += [BASE/'assets/playstation-logo.png', BASE/'assets/son-demarrage.wav']
+        for item in inputs:
             with item.open('rb') as stream: digest.update(hashlib.file_digest(stream, 'sha256').digest())
-        cache = Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local')) / 'PhantomStation' / 'Lanceurs-volumineux'
+        cache = Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local')) / 'PhantomStation' / 'Lanceurs-compatibles'
         cache.mkdir(parents=True, exist_ok=True)
-        launcher = cache / ('ps2-' + digest.hexdigest()[:24] + '.exe')
+        launcher = cache / (platform.lower() + '-' + digest.hexdigest()[:24] + '.exe')
         if not launcher.is_file():
             built = work / 'lanceur.exe'
-            build_stub(icon, built, work, background)
+            if platform == 'PS2':
+                build_stub(icon, built, work, background)
+            elif platform in ('NES', 'SNES', 'N64'):
+                from phantom_nintendo import build_nintendo_stub
+                build_nintendo_stub(platform, icon, built, work, background)
+            elif platform == 'DC':
+                from phantom_dreamcast import build_stub
+                build_stub(icon, built, work, background,
+                           generic=dc_profile != 'crazy_taxi_pal',
+                           house=dc_profile == 'house_pal_experimental')
+            else:
+                from emballer import _build_stub
+                _build_stub(icon, built, background)
             temporary = cache / (launcher.name + '.' + uuid.uuid4().hex + '.tmp')
             try:
                 shutil.copyfile(built, temporary)

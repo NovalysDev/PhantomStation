@@ -1,4 +1,6 @@
-# Private publication review — 2 November 2026
+# Historical publication review — 2 November 2026
+
+This is a historical review; the repository and v1.0.4 release are now public. It does not review later source changes.
 
 **Update:** the project owner subsequently reported having authorization to distribute the PS2 startup sound and GoldenEye component. The authorization documents were not independently reviewed. This record describes the earlier technical review; the other license and compatibility checks below remain relevant.
 
@@ -37,7 +39,7 @@ and the downloadable Windows archive must be assessed separately.
   binary are intentionally included. Filename checks do not prove that every
   possible protected or personal item has been found.
 - A targeted scan covered the five Git commits and 118 unique tracked blobs.
-  No matching common GitHub/OpenAI token, private-key marker or owner-specific
+  No matching common access token, private-key marker or owner-specific
   Windows path was found in scanned text. A targeted scan of 21,914 text files
   in the portable archive likewise found no matching patterns. These are not
   exhaustive secret or malware scans. The archive also contains public CA

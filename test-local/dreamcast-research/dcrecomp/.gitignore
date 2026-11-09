@@ -1,0 +1,17 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Build artifacts
+build/
+*.o
+*.obj
+*.exe
+*.lib
+*.pdb
+
+# Recompiler output. It is derived from the game's own executable, so it is
+# never committed - see README "Status".
+src/game/
+include/game/
+*_functions.json

@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "entrees": [
+    {
+      "id": "dc-vmu-absente",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Arret immediat : carte memoire Dreamcast introuvable",
+      "symptome": "Le jeu s'arrete en moins d'une seconde sur 'Impossible d'ouvrir la carte memoire Dreamcast', code 1.",
+      "cause": "Le lanceur impose PHANTOM_DC_VMU ; si la carte ne peut pas etre creee ou ouverte, l'ancien moteur faisait return 1 avant meme d'initialiser le jeu.",
+      "correctif": "Le moteur continue sans carte et ecrit '[VMU] carte memoire indisponible' au lieu de s'arreter.",
+      "controle": {
+        "fichier": "generic_main.c",
+        "motifs": [
+          "[VMU] carte memoire indisponible"
+        ]
+      },
+      "date": "2026-11-08",
+      "verifie": true
+    },
+    {
+      "id": "dc-grandia2-bourdon-aica",
+      "console": "DC",
+      "jeux": [
+        "Grandia II"
+      ],
+      "titre": "Bourdon / gresillement audio permanent",
+      "symptome": "Bourdon continu ou gresillement en jeu, parfois pris pour un defaut du mixage.",
+      "cause": "La banque AICA de Grandia II contient un echantillon constant (0x3FAC, PCM16 toujours a 16383) joue en boucle : ce n'est pas le mixeur, c'est une alarme du jeu. La 7e voix de cette alarme (0x3FAC) est celle qui sature ; 0x4070 est un vrai bip de menu et ne doit pas etre coupe.",
+      "correctif": "Muter uniquement la voix a l'adresse AICA 0x3FAC dans aica_pcm.c. Ne pas muter 0x4070 : le son disparaitrait.",
+      "controle": {
+        "fichier": "aica_pcm.c",
+        "motifs": [
+          "0x3FAC",
+          "0x3fac",
+          "3FAC"
+        ]
+      },
+      "date": "2026-11-08",
+      "verifie": true
+    },
+    {
+      "id": "dc-audio-pas-de-mixeur",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Rappel : le mixeur AICA n'est pas en cause par defaut",
+      "symptome": "Son bizarre sur un jeu Dreamcast et envie de toucher au mixage.",
+      "cause": "Les alternances bon/glitch observees sur Grandia II venaient de la session de jeu, pas du moteur : aica_pcm.c n'a pas change entre ces builds.",
+      "correctif": "Verifier d'abord le journal et la voie AICA fautive avant de modifier le mixage ; ne pas changer le moteur audio pour un symptome non reproduit.",
+      "date": "2026-11-08",
+      "verifie": true
+    },
+    {
+      "id": "ps2-codes-absents",
+      "console": "PS2",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Aucun code de triche trouve (non bloquant)",
+      "symptome": "Le journal indique 0 code PS2 trouve.",
+      "cause": "Les collections pnach ne couvrent pas ce numero de serie, ou le CRC de l'ELF ne correspond pas.",
+      "correctif": "Non bloquant : le jeu se compile sans codes. Ne pas relancer la compilation pour ce motif.",
+      "date": "2026-11-08",
+      "verifie": true
+    }
+  ]
+}

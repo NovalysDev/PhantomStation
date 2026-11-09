@@ -10,7 +10,7 @@ SAMPLE_SIZE = 64 * 1024
 
 
 def normalized_title(value):
-    text = Path(str(value)).stem if str(value).lower().endswith(('.iso', '.bin', '.cue', '.nes', '.sfc', '.smc', '.z64', '.v64', '.n64', '.exe')) else str(value)
+    text = Path(str(value)).stem if str(value).lower().endswith(('.iso', '.bin', '.cue', '.chd', '.nes', '.sfc', '.smc', '.z64', '.v64', '.n64', '.exe')) else str(value)
     text = re.sub(r'\([^()]*\)|\[[^\[\]]*\]', ' ', text)
     text = re.sub(r'\b(?:disc|disque|cd)\s*[-_. ]*\d+\b', ' ', text, flags=re.I)
     text = re.sub(r'\b(?:france|europe|usa|japan|japon|pal|ntsc)\b', ' ', text, flags=re.I)
@@ -39,7 +39,7 @@ def sample_file(path):
 
 def fingerprint_groups(console, groups):
     """Fingerprint ordered discs and their tracks without reading full disc images."""
-    if console not in ('PS1', 'PS2', 'NES', 'SNES', 'N64') or not groups:
+    if console not in ('PS1', 'PS2', 'NES', 'SNES', 'N64', 'DC') or not groups:
         raise ValueError('Sources du jeu indisponibles.')
     fingerprints = [[sample_file(path) for path in group] for group in groups]
     if any(not group for group in fingerprints):

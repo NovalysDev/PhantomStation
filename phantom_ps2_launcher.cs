@@ -129,8 +129,11 @@ class Ps2GameForm : Form {
         play.Enabled = false; scale.Enabled = false; fullscreen.Enabled = false; status.Text = PhantomLanguage.English ? "Starting the game…" : "Lancement du jeu…";
         bool full = fullscreen.Checked; string res = scale.SelectedIndex == 0 ? "1" : "2";
         try {
-            string card = Path.Combine(saves, "carte-memoire.ps2"), quick = Path.Combine(saves, "sauvegardes-rapides");
-            PrepareCard(card);
+            string selectedCard = Environment.GetEnvironmentVariable("PHANTOM_SELECTED_PS2_CARD");
+            string card = String.IsNullOrWhiteSpace(selectedCard) ? Path.Combine(saves, "carte-memoire.ps2") : selectedCard;
+            string quick = Path.Combine(saves, "sauvegardes-rapides");
+            if (String.IsNullOrWhiteSpace(selectedCard)) PrepareCard(card);
+            else if (!File.Exists(card)) throw new IOException("La carte mémoire PS2 sélectionnée est introuvable.");
             string elf = Path.Combine(root, "ps2-boot.elf"), disc = Path.Combine(root, "media", "disque.iso");
             Directory.CreateDirectory(quick);
             string codeFile = Ps2CodesForm.WriteActivePatches(root);
@@ -147,10 +150,22 @@ class Ps2GameForm : Form {
             if (!options.Yes("audio")) start.EnvironmentVariables["PS2_AUDIO_STRETCH"] = "0";
             if (!options.Yes("fps")) start.EnvironmentVariables["PHANTOM_PS2_HIDE_FPS"] = "1";
             if (!options.Yes("deinterlace")) start.EnvironmentVariables["PS2_NO_DEINTERLACE"] = "1";
+            // What playing meets that this build lacks - code the exploring runs never reached, vector programs - goes
+            // to the disc's learning folder, keyed like the compiler keys it; the next compilation of the disc reads it.
+            try {
+                string id;
+                using (var sha = System.Security.Cryptography.SHA1.Create()) using (var f = File.OpenRead(elf))
+                    id = BitConverter.ToString(sha.ComputeHash(f)).Replace("-", "").ToLowerInvariant();
+                string learn = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "PhantomStation", "PS2-apprentissage", id, "parties", "partie-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                Directory.CreateDirectory(Path.Combine(learn, "vu1"));
+                start.Arguments += " --misses " + Quote(Path.Combine(learn, "misses.txt"));
+                start.EnvironmentVariables["PS2_VU_RECORD"] = Path.Combine(learn, "vu1");
+            } catch (IOException) {} catch (UnauthorizedAccessException) {}
             await session.Run(start, true, full);
             status.Text = "";
         } catch (Exception ex) {
-            PhantomLaunchReport.Show(this, ex, game);
+            PhantomLaunchReport.Show(this, ex, game, ex is PhantomGameCrashException);
             status.Text = PhantomLanguage.English ? "Unable to start." : "Lancement impossible.";
         } finally { play.Enabled = true; scale.Enabled = true; fullscreen.Enabled = true; }
     }

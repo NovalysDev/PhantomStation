@@ -26,12 +26,35 @@ HOOK = r'''
 
 '''
 
+CARD_MARKER = 'PHANTOM_MULTI_CARDS_V1'
+CARD_EARLY_MARKER = 'PHANTOM_MULTI_CARDS_EARLY'
+CARD_LATE_ANCHOR = '    std::filesystem::path resolved_bios =\n'
+CARD_HOOK = r'''
+    // PHANTOM_MULTI_CARDS_V1: choices from the PhantomStation library.
+#ifdef _WIN32
+    {
+        const wchar_t* card1 = _wgetenv(L"PHANTOM_SELECTED_PS1_CARD1");
+        const wchar_t* card2 = _wgetenv(L"PHANTOM_SELECTED_PS1_CARD2");
+        if (card1 && *card1) { memcard1_path = std::filesystem::path(card1); memcard1_enabled = true; }
+        if (card2 && *card2) { memcard2_path = std::filesystem::path(card2); memcard2_enabled = true; }
+    }
+#endif
+'''
+
 
 def install_save_directory(project):
     path = Path(project) / 'psxrecomp' / 'runtime' / 'src' / 'main.cpp'
     source = path.read_text(encoding='utf-8')
-    if MARKER in source:
-        return
-    if source.count(ANCHOR) != 1:
-        raise ValueError('Impossible de relier le dossier des sauvegardes à ce moteur.')
-    path.write_text(source.replace(ANCHOR, HOOK + ANCHOR, 1), encoding='utf-8', newline='\n')
+    if MARKER not in source:
+        if source.count(ANCHOR) != 1:
+            raise ValueError('Impossible de relier le dossier des sauvegardes à ce moteur.')
+        source = source.replace(ANCHOR, HOOK + ANCHOR, 1)
+    if CARD_MARKER not in source:
+        if source.count(CARD_LATE_ANCHOR) != 1:
+            raise ValueError('Impossible de relier les deux cartes PS1 à ce moteur.')
+        source = source.replace(CARD_LATE_ANCHOR, CARD_HOOK + CARD_LATE_ANCHOR, 1)
+    if CARD_EARLY_MARKER not in source:
+        if source.count(ANCHOR) != 1:
+            raise ValueError('Impossible de préparer les cartes dans le lanceur PS1.')
+        source = source.replace(ANCHOR, CARD_HOOK.replace(CARD_MARKER, CARD_EARLY_MARKER) + ANCHOR, 1)
+    path.write_text(source, encoding='utf-8', newline='\n')

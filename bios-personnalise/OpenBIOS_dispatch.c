@@ -23,7 +23,7 @@ extern void gte_write_data(CPUState* cpu, uint8_t reg, uint32_t val);
 extern uint32_t gte_read_data(CPUState* cpu, uint8_t reg);
 extern uint32_t g_debug_current_func_addr;
 extern void debug_server_trace_dispatch(uint32_t func_addr);
-/* BIOS HLE tier (CLAUDE.md §0 amendment 2026-07-02): null-by-default
+/* BIOS HLE tier: null-by-default
  * hook consulted at the top of every dispatch iteration, BEFORE any
  * backend (game image / dirty-RAM interp / static table) claims the
  * target. Installed by the runtime (bios_hle.c) when [runtime] bios_hle
@@ -7577,7 +7577,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
         while (lo <= hi) {
             int mid = (lo + hi) / 2;
             if (dispatch_table[mid].addr == phys) {
-                /* Kernel-image bless guard (CLAUDE.md Rule 18). The keys in
+                /* Kernel-image bless guard. The keys in
                  * the relocated kernel window [0x500,0x4A80) were compiled
                  * from the ROM source of the BIOS's boot-time kernel copy —
                  * but the BIOS (and games) PATCH kernel RAM at runtime (pad/
@@ -7605,7 +7605,7 @@ static void psx_dispatch_impl(CPUState* cpu, uint32_t addr, uint32_t stop_addr) 
         }
         }
         /* Static dispatch miss.  Self-modifying / install-at-runtime RAM
-         * (CLAUDE.md Rule 18): the BIOS writes dispatch stubs into kernel
+         * the BIOS writes dispatch stubs into kernel
          * RAM at runtime.  If the target page has been written-to since
          * boot, interpret the basic block on cpu state.  Falls back to
          * psx_unknown_dispatch for genuinely unmapped PCs. */

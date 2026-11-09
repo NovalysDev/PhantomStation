@@ -1,5 +1,9 @@
 # PhantomStation
 
+> Les sources du dépôt sont plus récentes que les archives de test v1.0.4 ; ces anciennes archives ne contiennent pas encore les nouveautés Dreamcast et cartes mémoire.
+
+La compilation PS2 et Dreamcast conserve localement des informations propres à chaque disque. Elles peuvent être reprises lors d’une prochaine compilation du même jeu ; cela ne garantit pas sa compatibilité complète et ne modifie pas automatiquement un jeu déjà créé.
+
 **Pour utiliser PhantomStation :** télécharge `PhantomStation-portable-essai.zip` dans la [version de test GitHub](https://github.com/NovalysDev/PhantomStation/releases), extrais-le dans un dossier et ouvre `PhantomStation.exe`. Les moteurs et outils sont inclus.
 
 **Pour les développeurs :** `PhantomStation-sources-sans-dependances.zip` contient les sources, sans l’EXE ni les outils ; il ne fonctionne pas seul. Ces versions restent expérimentales.
@@ -53,7 +57,7 @@ Le lanceur génère un descripteur une piste pour un ISO ou un BIN sans CUE. Cet
 
 Le BIOS PhantomStation personnalisé est proposé par défaut pour les nouveaux projets ; décocher l'option pour utiliser l'OpenBIOS fourni avec PSXRecomp. Son intégration est expérimentale : un essai avec Parasite Eve II a atteint l'introduction du jeu, mais la compatibilité complète et les autres titres restent à vérifier. Elle exige la révision du moteur testée ; le lanceur signale si celle-ci a changé.
 
-Le lanceur requiert Windows, Git pour Windows, Python 3.11 ou supérieur avec Tkinter et Pillow, le dossier `psxrecomp` et la chaîne d'outils `toolchain` présents à côté de `lanceur.py`. Le raccourci utilise le Python fourni par Codex lorsqu'il existe, ou `pythonw.exe` dans le PATH. PSXRecomp est soumis à sa propre licence, notamment son usage non commercial. Le logo PlayStation provient de [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Playstation_logo_colour.svg). Les données de jeu sont fournies par l'utilisateur.
+Le lanceur requiert Windows, Git pour Windows, Python 3.11 ou supérieur avec Tkinter et Pillow, le dossier `psxrecomp` et la chaîne d'outils `toolchain` présents à côté de `lanceur.py`. Le raccourci utilise un environnement Python disponible sur le système, ou `pythonw.exe` dans le PATH. PSXRecomp est soumis à sa propre licence, notamment son usage non commercial. Le logo PlayStation provient de [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Playstation_logo_colour.svg). Les données de jeu sont fournies par l'utilisateur.
 
 Le bouton **Codes** propose des codes selon le numéro exact du disque, désactivés par défaut, et permet d’en ajouter manuellement. Les formats non pris en charge ne peuvent pas être activés. La compatibilité de chaque code avec le jeu reste à vérifier. Les données locales proviennent de [DuckStation CHTDB](https://github.com/duckstation/chtdb) et de [Libretro Database](https://github.com/libretro/libretro-database), sous les licences fournies dans assets. Le catalogue ne garantit pas la présence de codes pour chaque jeu français.
 

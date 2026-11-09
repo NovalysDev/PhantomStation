@@ -1,6 +1,6 @@
 # PhantomStation
 
-> **Version de test 1.0.5 :** toutes les consoles peuvent présenter des bugs. La Dreamcast vient d’être ajoutée et reste particulièrement expérimentale. Pendant un jeu, utilise **F10** ou **Signaler un bug** pour transmettre le journal complet.
+> **Version de test :** toutes les consoles peuvent présenter des bugs. La Dreamcast reste particulièrement expérimentale. Utilise **F10** pour signaler un problème et transmettre le journal du jeu.
 
 La compilation PS2 et Dreamcast conserve localement des informations propres à chaque disque. Elles peuvent être reprises lors d’une prochaine compilation du même jeu ; cela ne garantit pas sa compatibilité complète et ne modifie pas automatiquement un jeu déjà créé.
 
@@ -21,7 +21,7 @@ PhantomStation propose la création de jeux PS1, PS2, NES, Super Nintendo, Ninte
 
 Extraire d’abord les archives `.7z` ; le format `.chd` est pris en charge pour la Dreamcast. Dans les jeux NES et Super Nintendo, les commandes et réglages s’ouvrent avec F2, les filtres avec F3 et les sauvegardes rapides avec F8/F9. Dans GoldenEye N64, F10 ouvre les réglages du moteur ; les codes sont ceux du jeu. Les options ne sont pas identiques à celles des jeux PlayStation.
 
-Pour signaler un bug, ouvre le jeu depuis la bibliothèque puis appuie sur **F10** ou clique sur **Signaler un bug**. Décris le problème et vérifie le rapport : le journal complet est envoyé seulement si tu choisis de l’envoyer. Un seul journal limité en taille est conservé par jeu et remplacé à son prochain lancement. La touche F10 reste transmise au jeu ; elle peut aussi ouvrir ses réglages si celui-ci l’utilise.
+Pour signaler un bug, ouvre le jeu depuis la bibliothèque et appuie sur **F10** pendant la partie ou après ton retour dans PhantomStation. Décris le problème, puis choisis si tu veux joindre les sauvegardes et, sur Dreamcast, les blocs de mémoire enregistrés. Après confirmation, le jeu se ferme avant l’envoi de son journal. Une carte partagée peut contenir des sauvegardes d’autres jeux ; les blocs peuvent contenir des données de la mémoire du jeu. Un seul journal limité en taille est conservé par jeu et remplacé à son prochain lancement. F10 reste transmise au jeu et peut aussi ouvrir ses réglages.
 
 Les jeux Nintendo utilisent [RetroRecomp](https://github.com/ArthurReboulSalze/RetroRecomp), [NESRecomp](https://github.com/mstan/nesrecomp) et [SNESRecomp](https://github.com/RetroPortingToolKit/snesrecomp). Les moteurs NES/SNES ont des licences **PolyForm Noncommercial** ; les notices et licences sont conservées dans `nintendo-recomp`. PhantomStation applique un correctif PAL au moteur NES et dirige les données des jeux vers le dossier Documents.
 

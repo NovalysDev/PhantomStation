@@ -33,7 +33,7 @@ def open_report_dialog(parent, failure):
     ctk.CTkLabel(outer, text=tr('Envoyer le rapport d’erreur'), text_color=TEXT, font=('Segoe UI', 21, 'bold'), anchor='w').pack(fill='x')
     ctk.CTkLabel(outer, text=tr('Vérifie le contenu avant l’envoi direct.'), text_color=MUTED, font=('Segoe UI', 11), anchor='w').pack(fill='x', pady=(0, 8))
     footer = ctk.CTkFrame(outer, fg_color='transparent'); footer.pack(side='bottom', fill='x', pady=(8, 0))
-    hint = ('Le ZIP contient le journal complet, qui peut inclure des chemins locaux. Il sera transmis au service de diagnostic avec le résumé affiché.'
+    hint = ('Le ZIP contient le journal complet et les sauvegardes éventuellement choisies. Il peut inclure des chemins locaux.'
             if failure.get('attachment') else
             'Le rapport sera transmis directement au service Novalys. '
             + ('Les dernières lignes sont envoyées ; le journal complet reste enregistré sur le PC.'
@@ -118,4 +118,6 @@ def open_report_dialog(parent, failure):
         dialog.after(100, poll_send)
     dialog.transient(parent)
     dialog.lift()
+    if failure.get('auto_send'):
+        dialog.after(100, transmit)
     return dialog

@@ -51,6 +51,9 @@ class GameInCompiler:
         self.game_info = None
         self.report_hotkey = None
         self.report_open = False
+        self.pending_report = None
+        self.save_selection = {}
+        self.root.bind_all('<F10>', self._compiler_f10, add='+')
 
     def start(self, exe, env=None):
         if self.process is not None:
@@ -68,6 +71,7 @@ class GameInCompiler:
         info = game_info(exe, include_cover=False)
         self.game_info = info
         selected = launch_environment(info)
+        self.save_selection = dict(selected)
         environment.update(selected)
         if selected:
             backup_selected(info['platform'])
@@ -109,7 +113,7 @@ class GameInCompiler:
         toolbar = ctk.CTkFrame(self.overlay, fg_color='#101d31', corner_radius=0, height=48)
         toolbar.pack(fill='x')
         button(toolbar, '← Retour au compilateur', self.close_game, width=200).pack(side='left', padx=10, pady=6)
-        button(toolbar, 'Signaler un bug  ·  F10', self.report_game, width=170).pack(side='right', padx=10, pady=6)
+        ctk.CTkLabel(toolbar, text=tr('F10 : signaler un bug'), text_color=MUTED).pack(side='right', padx=12)
         self.status = tk.StringVar(value=tr('Ouverture du jeu…'))
         ctk.CTkLabel(toolbar, textvariable=self.status, text_color=TEXT, anchor='w').pack(side='left', fill='x', expand=True, padx=12)
         self.surface = tk.Frame(self.overlay, bg='#030814', highlightthickness=0)
@@ -123,7 +127,7 @@ class GameInCompiler:
         self.report_hotkey.update_pids({self.process.pid})
         if not self.report_hotkey.start():
             messagebox.showwarning(tr('Signaler un bug'),
-                tr('Le raccourci F10 est indisponible. Utilise le bouton Signaler un bug.'), parent=self.root)
+                tr('Le raccourci F10 est indisponible pendant le jeu. Ferme le jeu puis appuie sur F10 dans PhantomStation.'), parent=self.root)
         self._poll()
 
     def _processes(self):
@@ -183,7 +187,7 @@ class GameInCompiler:
                 if self.report_hotkey.consume() and not self.report_open:
                     self.report_game()
             if not pids and self.process.poll() is not None:
-                self._finish(); return
+                self._finish(completed=True); return
             valid = self.child and user32.IsWindow(self.child) and user32.IsWindowVisible(self.child)
             if not valid:
                 self.child = None
@@ -214,26 +218,129 @@ class GameInCompiler:
                     self.last_close = now
             self.after_id = self.root.after(80, self._poll)
         except (OSError, tk.TclError) as exc:
+            self.pending_report = None
+            self.report_open = False
             self._finish()
             messagebox.showerror(tr('Fenêtre du jeu'), str(exc), parent=self.root)
 
+    def _compiler_f10(self, event=None):
+        # During a game the native hook also sees F10; avoid processing it twice.
+        if self.process is None:
+            self.report_game()
+        return 'break'
+
+    def _recover_last_game(self):
+        """After reopening the compiler, find the latest registered game's log."""
+        import re
+        from bibliotheque import registered_games, game_info
+        local = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local'))
+        root = local / 'PhantomStation/Journaux/Jeux'
+        journals = []
+        if root.is_dir():
+            for folder in root.iterdir():
+                match = re.search(r' - ([0-9a-f]{32})$', folder.name)
+                journal = folder / 'journal.log'
+                if match and folder.is_dir() and not folder.is_symlink() and journal.is_file() and not journal.is_symlink():
+                    journals.append((journal.stat().st_mtime_ns, match.group(1)))
+        games = {}
+        for path in registered_games():
+            try:
+                info = game_info(path, include_cover=False)
+                games[info['id']] = info
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+                continue
+        for _, ident in sorted(journals, reverse=True):
+            if ident in games:
+                self.game_info = games[ident]
+                # A former session did not record its card selection; use the
+                # current choice and tell the user before including it.
+                self.save_selection = self._current_save_selection(self.game_info)
+                return
+
+    @staticmethod
+    def _current_save_selection(info):
+        import cartes_memoire as cm
+        console = info['platform']
+        selected = cm.selected(console)
+        if console in cm.NINTENDO:
+            folder = cm.profile_dir(info)
+            return {'PHANTOM_SELECTED_PROFILE_DIR': str(folder)} if folder else {}
+        result = {}
+        if selected:
+            key = {'DC': 'PHANTOM_SELECTED_DC_CARD', 'PS1': 'PHANTOM_SELECTED_PS1_CARD1',
+                   'PS2': 'PHANTOM_SELECTED_PS2_CARD'}[console]
+            result[key] = str(selected['directory'] / cm.CARDS[console])
+        if console in ('PS1', 'PS2'):
+            other = cm.selected(console, 2)
+            if other:
+                result['PHANTOM_SELECTED_' + console + '_CARD2'] = str(other['directory'] / cm.CARDS[console])
+        return result
+
     def report_game(self):
-        if not self.game_info or self.report_open:
+        if self.report_open:
             return
         self.report_open = True
         try:
+            if not self.game_info:
+                self._recover_last_game()
+            if not self.game_info:
+                messagebox.showinfo(tr('Signaler un bug'), tr('Aucun journal de jeu trouvé. Lance un jeu avant de faire un rapport.'), parent=self.root)
+                self.report_open = False
+                return
             description = simpledialog.askstring(tr('Signaler un bug'),
                 tr('Que se passe-t-il et à quel moment ?'), parent=self.root)
             if description is None:
+                self.report_open = False
                 return
-            from diagnostic_jeu import create_game_diagnostic
+            if len(description.strip()) < 5:
+                raise ValueError('Décris brièvement le problème.')
+            include_save = messagebox.askyesnocancel(tr('Sauvegarde du jeu'),
+                tr('Joindre la sauvegarde ou les cartes actuellement utilisées ?\n\nUne carte partagée peut aussi contenir des sauvegardes d’autres jeux.\nOui : joindre les sauvegardes. Non : envoyer le journal seul.'), parent=self.root)
+            if include_save is None:
+                self.report_open = False
+                return
+            include_blocks = False
+            if self.game_info.get('platform') == 'DC':
+                include_blocks = messagebox.askyesnocancel(tr('Blocs Dreamcast'),
+                    tr('Joindre les blocs de mémoire enregistrés pour les parties du jeu qui ne fonctionnent pas encore ?\n\nIls peuvent contenir des données présentes dans la mémoire du jeu.\nOui : les joindre. Non : envoyer sans ces blocs.'), parent=self.root)
+                if include_blocks is None:
+                    self.report_open = False
+                    return
+            action = (tr('Le jeu va se fermer. ') if self.process is not None else '') + (
+                tr('Le journal complet et les sauvegardes choisies seront envoyés au service de diagnostic.') if include_save else
+                tr('Le journal complet sera envoyé au service de diagnostic.'))
+            if include_blocks:
+                action += '\n' + tr('Les blocs Dreamcast disponibles seront joints.')
+            if not messagebox.askyesno(tr('Envoyer le rapport'), action + '\n\n' + tr('Continuer ?'), parent=self.root):
+                self.report_open = False
+                return
+            self.pending_report = (self.game_info, description, bool(include_save), dict(self.save_selection), bool(include_blocks))
+            if self.process is not None:
+                self.close_game()
+            else:
+                self.root.after_idle(self._send_pending_report)
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+            self.report_open = False
+            messagebox.showerror(tr('Rapport impossible'), str(exc), parent=self.root)
+
+    def _send_pending_report(self):
+        if not self.pending_report:
+            return
+        info, description, include_save, selection, include_blocks = self.pending_report
+        self.pending_report = None
+        try:
+            from diagnostic_jeu import create_game_diagnostic, game_save_files
             from phantom_report_ui import open_report_dialog
-            path, text = create_game_diagnostic(self.game_info, description)
-            dialog = open_report_dialog(self.root, {'path': path, 'text': text, 'game': self.game_info['name'],
-                                                    'kind': 'jeu', 'attachment': True})
+            from bibliotheque import game_running
+            if game_running(info):
+                raise ValueError('Le jeu est encore ouvert. Ferme-le avant de créer son rapport.')
+            saves = game_save_files(info, selection) if include_save else []
+            path, text = create_game_diagnostic(info, description, save_files=saves, include_blocks=include_blocks)
+            dialog = open_report_dialog(self.root, {'path': path, 'text': text, 'game': info['name'],
+                                                    'kind': 'jeu', 'attachment': True, 'auto_send': True})
             if dialog is not None:
                 self.root.wait_window(dialog)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
             messagebox.showerror(tr('Rapport impossible'), str(exc), parent=self.root)
         finally:
             self.report_open = False
@@ -246,7 +353,7 @@ class GameInCompiler:
             user32.PostMessageW(self.child, 0x0010, 0, 0)
             self.last_close = time.monotonic()
 
-    def _finish(self):
+    def _finish(self, completed=False):
         if self.report_hotkey is not None:
             self.report_hotkey.close()
             self.report_hotkey = None
@@ -263,3 +370,5 @@ class GameInCompiler:
             kernel32.CloseHandle(self.job); self.job = None
         self.process = None; self.child = None; self.windows = []; self.closing = False
         self.root.deiconify(); self.root.lift(); self.root.focus_force()
+        if completed and self.pending_report:
+            self.root.after_idle(self._send_pending_report)

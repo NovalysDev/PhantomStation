@@ -20,7 +20,7 @@ The latest test build improves handling of special characters in build paths, au
 
 ## Reporting a game problem
 
-When a game is opened from the PhantomStation library, press **F10** or use **Report a bug**, describe the issue and review the report. The complete current game log is attached and sent only when you select **Send report**. The receiving address is not shown in the application. One bounded log is retained per game and replaced at its next launch. F10 is also passed to the game, so a game that already uses F10 can react to it.
+In the current development version, press **F10** during a game opened from the library, or after returning to PhantomStation. Describe the problem and choose whether to include the save and, for Dreamcast, any recorded memory blocks. After confirmation, the game closes before its final log is collected and the report is sent. Shared memory cards may contain other games' saves, and recorded blocks may contain game-memory data. The receiving address is not shown. One bounded log is kept per game and replaced at its next launch. F10 is also passed to the game, so a game that already uses F10 can react to it. The published v1.0.5 release retains its earlier reporting flow until the next release.
 
 ## What it does
 

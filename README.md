@@ -6,7 +6,7 @@ PhantomStation brings several existing recompilation and native-port projects in
 
 > **Experimental project:** compatibility and installation are not complete. A generated executable, a boot screen or a playable opening does **not** prove that a game can be completed. The portable download is a test version, not a stable release.
 
-> **v1.0.5 test release:** all supported consoles can have bugs. Dreamcast support has been added and remains especially experimental. Please report issues with the in-game **F10** command or **Report a bug** button.
+> **Test release:** all supported consoles can have bugs. Dreamcast support has been added and remains especially experimental. Press **F10** to report an issue.
 
 ## Which download should I choose?
 
@@ -20,7 +20,7 @@ The latest test build improves handling of special characters in build paths, au
 
 ## Reporting a game problem
 
-In the current development version, press **F10** during a game opened from the library, or after returning to PhantomStation. Describe the problem and choose whether to include the save and, for Dreamcast, any recorded memory blocks. After confirmation, the game closes before its final log is collected and the report is sent. Shared memory cards may contain other games' saves, and recorded blocks may contain game-memory data. The receiving address is not shown. One bounded log is kept per game and replaced at its next launch. F10 is also passed to the game, so a game that already uses F10 can react to it. The published v1.0.5 release retains its earlier reporting flow until the next release.
+Press **F10** during a game opened from the library, or after returning to PhantomStation. Describe the problem and choose whether to include the save and, for Dreamcast, any recorded memory blocks. After confirmation, the game closes before its final log is collected and the report is sent. Shared memory cards may contain other games' saves, and recorded blocks may contain game-memory data. The receiving address is not shown. One bounded log is kept per game and replaced at its next launch. F10 is also passed to the game, so a game that already uses F10 can react to it.
 
 ## What it does
 

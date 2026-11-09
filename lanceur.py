@@ -609,7 +609,7 @@ class App:
         # The compilation screen's blue and red progress bars use this theme.
         ttk.Style(root).theme_use('clam')
         self.events = queue.Queue()
-        self.game_view = GameInCompiler(root)
+        self.game_view = GameInCompiler(root, on_learning=lambda message: self.status.set(message) if hasattr(self, 'status') else None)
         self.progress_window = None
         self.finished_game = None
         self.finished_images = ([], None)

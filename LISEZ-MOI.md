@@ -2,7 +2,9 @@
 
 > **Version de test :** toutes les consoles peuvent présenter des bugs. La Dreamcast reste particulièrement expérimentale. Utilise **F10** pour signaler un problème et transmettre le journal du jeu.
 
-La compilation PS2 et Dreamcast conserve localement des informations propres à chaque disque. Elles peuvent être reprises lors d’une prochaine compilation du même jeu ; cela ne garantit pas sa compatibilité complète et ne modifie pas automatiquement un jeu déjà créé.
+La compilation PS2 et Dreamcast conserve localement des informations propres à chaque disque. Elles peuvent être reprises lors d’une prochaine compilation du même jeu. L’exécutable d’origine reste intact et la compatibilité complète n’est pas garantie.
+
+Pour les jeux Dreamcast ouverts depuis la bibliothèque, PhantomStation vérifie aussi les nouveaux appels rencontrés après la fermeture de la partie. S’il en trouve, il prépare une version d’essai en arrière-plan et vérifie son démarrage. Lors d’une partie suivante, la fenêtre indique que cette version est à l’essai. Après avoir atteint le passage concerné, tu peux confirmer qu’il fonctionne pour conserver l’amélioration, la refuser pour garder le moteur précédent, ou attendre de l’avoir vérifiée. Le jeu ne peut pas encore intégrer ces fonctions au milieu de la partie et le test de démarrage ne prouve pas qu’un boss apparaît.
 
 **Pour utiliser PhantomStation :** télécharge `PhantomStation-portable-essai.zip` dans la [version de test GitHub](https://github.com/NovalysDev/PhantomStation/releases), extrais-le dans un dossier et ouvre `PhantomStation.exe`. Les moteurs et outils sont inclus.
 

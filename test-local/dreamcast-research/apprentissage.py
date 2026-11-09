@@ -484,15 +484,18 @@ def learning_run(exe: Path, boot: Path, disc: Path, out: Path, seconds: int = 75
     out.mkdir(parents=True)
     env = dict(os.environ, PHANTOM_DC_LEARN_DIR=str(out), DCRECOMP_TEST_HIDDEN='1', SDL_AUDIODRIVER='dummy',
                DCRECOMP_TEST_NO_CONTROLLERS='1', DCRECOMP_TEST_CONTROLLER_DESCRIPTOR='1',
-               DCRECOMP_NO_PRESENT='1', DCRECOMP_TEST_VMU=str(out / 'carte.vmu'),
+               DCRECOMP_NO_PRESENT='1', DCRECOMP_TEST_VMU=str(out / 'carte.vmu'), PHANTOM_DC_SON_ANALYSE='0',
                DCRECOMP_TEST_START_MS='12000', DCRECOMP_TEST_START_EVERY_MS='3000',
                DCRECOMP_TEST_A_MS='14000', DCRECOMP_TEST_A_EVERY_MS='2500',
                DCRECOMP_TEST_CLOSE_MS=str(seconds * 1000))
     for k in ('PHANTOM_DC_VMU', 'DCRECOMP_TEST_IRQ_ADDR'): env.pop(k, None)
     with (out / 'journal.log').open('wb') as log:
         try:
-            subprocess.run([str(exe), str(boot), str(disc)], cwd=exe.parent, env=env, stdout=log,
-                           stderr=subprocess.STDOUT, timeout=seconds + 20,
-                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            result = subprocess.run([str(exe), str(boot), str(disc)], cwd=exe.parent, env=env, stdout=log,
+                                    stderr=subprocess.STDOUT, timeout=seconds + 20,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            if os.getenv('PHANTOM_DC_STRICT_LEARN') == '1' and result.returncode:
+                raise RuntimeError('Le moteur d’essai s’est arrêté avec le code ' + str(result.returncode) + '.')
         except subprocess.TimeoutExpired:
-            pass
+            if os.getenv('PHANTOM_DC_STRICT_LEARN') == '1':
+                raise RuntimeError('Le moteur d’essai ne s’est pas fermé dans le délai prévu.')

@@ -92,6 +92,47 @@ class DreamcastGameForm : Form {
             if(File.Exists(settings)) File.Replace(tmp,settings,null); else File.Move(tmp,settings);
         } finally { if(File.Exists(tmp)) File.Delete(tmp); }
     }
+    // Optional local repair for this exact cached runtime. The original game
+    // package is untouched; a repair is never used for a different build.
+    static string CorrectedRuntime(string original) {
+        string folder=Path.GetDirectoryName(original);
+        string marker=Path.Combine(folder,"dreamcast-correction.sha256");
+        if(!File.Exists(marker)) return original;
+        if(new FileInfo(marker).Length>256) throw new IOException("La vérification de la correction Dreamcast est invalide.");
+        string[] lines=File.ReadAllLines(marker);
+        if(lines.Length!=2 || !System.Text.RegularExpressions.Regex.IsMatch(lines[0],"^[0-9a-f]{64}$") ||
+           !System.Text.RegularExpressions.Regex.IsMatch(lines[1],"^[0-9a-f]{64}$"))
+            throw new IOException("La vérification de la correction Dreamcast est invalide.");
+        string corrected=Path.Combine(folder,"dreamcast-correction.exe");
+        if(!File.Exists(corrected)) throw new IOException("Le moteur Dreamcast corrigé est introuvable.");
+        using(var sha=System.Security.Cryptography.SHA256.Create()) {
+            string originalHash, correctedHash;
+            using(var f=File.OpenRead(original)) originalHash=BitConverter.ToString(sha.ComputeHash(f)).Replace("-","").ToLowerInvariant();
+            using(var f=File.OpenRead(corrected)) correctedHash=BitConverter.ToString(sha.ComputeHash(f)).Replace("-","").ToLowerInvariant();
+            if(originalHash!=lines[0]) return original;
+            if(correctedHash!=lines[1])
+                throw new IOException("Le moteur Dreamcast corrigé est endommagé ; il n’a pas été lancé.");
+        }
+        return corrected;
+    }
+    static string TrialRuntime(string original) {
+        string baseline=CorrectedRuntime(original);
+        if(Environment.GetEnvironmentVariable("PHANTOM_DC_TRIAL")!="1") return baseline;
+        string folder=Path.GetDirectoryName(original), marker=Path.Combine(folder,"dreamcast-candidat.sha256");
+        string trial=Path.Combine(folder,"dreamcast-candidat.exe");
+        if(!File.Exists(marker)||!File.Exists(trial)||new FileInfo(marker).Length>256) return baseline;
+        string[] lines=File.ReadAllLines(marker);
+        if(lines.Length!=3) return baseline;
+        foreach(string line in lines) if(!System.Text.RegularExpressions.Regex.IsMatch(line,"^[0-9a-f]{64}$")) return baseline;
+        using(var sha=System.Security.Cryptography.SHA256.Create()) {
+            string first, current, candidate;
+            using(var f=File.OpenRead(original)) first=BitConverter.ToString(sha.ComputeHash(f)).Replace("-","").ToLowerInvariant();
+            using(var f=File.OpenRead(baseline)) current=BitConverter.ToString(sha.ComputeHash(f)).Replace("-","").ToLowerInvariant();
+            using(var f=File.OpenRead(trial)) candidate=BitConverter.ToString(sha.ComputeHash(f)).Replace("-","").ToLowerInvariant();
+            if(first!=lines[0]||current!=lines[1]||candidate!=lines[2]) return baseline;
+        }
+        return trial;
+    }
     async void StartGame(object sender,EventArgs e) {
         play.Enabled=false;
         try {
@@ -99,7 +140,14 @@ class DreamcastGameForm : Form {
             string folder=Path.GetDirectoryName(game);
             string boot=Path.Combine(folder,"1ST_READ.BIN"),disc=Path.Combine(folder,"disque.chd");
             if(!File.Exists(boot)||!File.Exists(disc)) throw new FileNotFoundException(L("Données du jeu manquantes.","Game data is missing."));
-            var start=new ProcessStartInfo(game) { WorkingDirectory=folder, UseShellExecute=false,
+            string runtime=TrialRuntime(game);
+            string token=Environment.GetEnvironmentVariable("PHANTOM_DC_TRIAL_TOKEN");
+            if(runtime==Path.Combine(folder,"dreamcast-candidat.exe") &&
+               !String.IsNullOrEmpty(token) && System.Text.RegularExpressions.Regex.IsMatch(token,"^[0-9a-f]{32}$")) {
+                try { File.WriteAllText(Path.Combine(folder,"dreamcast-candidat-essai-"+token+".txt"),"ok"); }
+                catch(IOException) {} catch(UnauthorizedAccessException) {}
+            }
+            var start=new ProcessStartInfo(runtime) { WorkingDirectory=folder, UseShellExecute=false,
                 Arguments="\""+boot+"\" \""+disc+"\"" };
             string selectedCard=Environment.GetEnvironmentVariable("PHANTOM_SELECTED_DC_CARD");
             if(!String.IsNullOrWhiteSpace(selectedCard) && !File.Exists(selectedCard))

@@ -188,7 +188,9 @@ def game_running(game):
     env = os.environ.copy()
     env['PHANTOM_CHECK_PACKAGE'] = str(game['path'])
     env['PHANTOM_CHECK_RUNTIME'] = str(LOCAL / 'PhantomStation' / 'Jeux' / game['id'] / game['runtime'])
-    script = "Get-Process | ForEach-Object { try { if ($_.Path -and ($_.Path -ieq $env:PHANTOM_CHECK_RUNTIME -or $_.Path -ieq $env:PHANTOM_CHECK_PACKAGE)) { 'RUNNING' } } catch {} }"
+    env['PHANTOM_CHECK_CORRECTED_RUNTIME'] = str(LOCAL / 'PhantomStation' / 'Jeux' / game['id'] / 'dreamcast-correction.exe') if game.get('platform') == 'DC' else ''
+    env['PHANTOM_CHECK_TRIAL_RUNTIME'] = str(LOCAL / 'PhantomStation' / 'Jeux' / game['id'] / 'dreamcast-candidat.exe') if game.get('platform') == 'DC' else ''
+    script = "Get-Process | ForEach-Object { try { if ($_.Path -and ($_.Path -ieq $env:PHANTOM_CHECK_RUNTIME -or $_.Path -ieq $env:PHANTOM_CHECK_PACKAGE -or ($env:PHANTOM_CHECK_CORRECTED_RUNTIME -and $_.Path -ieq $env:PHANTOM_CHECK_CORRECTED_RUNTIME) -or ($env:PHANTOM_CHECK_TRIAL_RUNTIME -and $_.Path -ieq $env:PHANTOM_CHECK_TRIAL_RUNTIME))) { 'RUNNING' } } catch {} }"
     result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
                             capture_output=True, text=True, env=env, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
     if result.returncode:

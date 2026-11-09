@@ -30,6 +30,9 @@ class DiagnosticClosureTests(unittest.TestCase):
         view = compiler.GameInCompiler.__new__(compiler.GameInCompiler)
         view.root = Root(); view.game_info = game; view.report_open = False
         view.pending_report = None; view.save_selection = {}; view.process = object()
+        view.trial_hash = view.trial_token = view.trial_log_stamp = None
+        view.debug_active = False; view.pending_review = None
+        view._queue_learning = lambda info: None
         view.closed = False; view.close_game = lambda: setattr(view, 'closed', True)
         view.report_hotkey = view.after_id = view.previous_protocol = view.overlay = view.job = view.child = None
         view.windows = []; view.closing = False
@@ -50,6 +53,23 @@ class DiagnosticClosureTests(unittest.TestCase):
             view.root.callbacks.pop()()
         self.assertTrue(create.call_args.kwargs['include_blocks'])
         self.assertTrue(dialog.call_args.args[1]['auto_send'])
+
+    def test_trial_waits_for_the_players_confirmation(self):
+        view = compiler.GameInCompiler.__new__(compiler.GameInCompiler)
+        view.root = Root()
+        game = {'id': 'a' * 32, 'platform': 'DC'}
+        view.pending_review = (game, 'b' * 64)
+        view._queue_learning = lambda info: None
+        with patch.object(compiler.messagebox, 'askyesnocancel', return_value=None), \
+             patch('phantom_dc_autolearn.decide') as decide:
+            view._review_learning()
+            decide.assert_not_called()
+        view.pending_review = (game, 'b' * 64)
+        with patch.object(compiler.messagebox, 'askyesnocancel', return_value=True), \
+             patch.object(compiler.messagebox, 'showinfo'), \
+             patch('phantom_dc_autolearn.decide') as decide:
+            view._review_learning()
+            decide.assert_called_once_with(game, 'b' * 64, True)
 
     def test_dreamcast_blocks_belong_to_last_session(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {'LOCALAPPDATA': temp}):

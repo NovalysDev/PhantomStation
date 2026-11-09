@@ -327,15 +327,15 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
              * Sur la puce, ce bruit est noye dans le mixage DSP ; notre
              * mixage direct le rend comme un bourdonnement sature. On coupe
              * seule la famille tenue (0x3FAC) : le bip de selection (0x4070) reste audible. */
+            int mute_alarm_voice;
             { static int mute_alarm = -1;
               if (mute_alarm < 0) {
                   const char *e = getenv("PHANTOM_DC_MUTE_ALARM");
                   mute_alarm = e ? atoi(e) : 1;   /* bourdon 0x3FAC coupe par defaut */
               }
               unsigned oct_alarme = (v[6] >> 11) & 15u;
-              if (mute_alarm && f.lsa == 0 &&
-                  f.sa == 0x3FAC && f.lea == 0x54 && oct_alarme == 15)
-                  continue;
+              mute_alarm_voice = mute_alarm && f.lsa == 0 &&
+                  f.sa == 0x3FAC && f.lea == 0x54 && oct_alarme == 15;
             }
 
             /* LFO : valeurs du trémolo (alfo) et du vibrato (plfo) à ce pas. */
@@ -352,7 +352,10 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
             unsigned tl = voff ? 0 : (v[10] >> 8) & 255u;
             unsigned disdl = (v[9] >> 8) & 15u, dipan = v[9] & 31u;
             unsigned max_att = 255 - ofsatt;
-            if (disdl) {
+            if (mute_alarm_voice) {
+                /* Silence the output only: envelopes, playback position and
+                 * key-off must keep running so the driver can reuse the voice. */
+            } else if (disdl) {
                 unsigned full = tl + send_level[disdl], pan = full + send_level[(~dipan) & 15u];
                 unsigned dl = (dipan & 0x10) ? full : pan, dr = (dipan & 0x10) ? pan : full;
                 if (dl > max_att) dl = max_att;

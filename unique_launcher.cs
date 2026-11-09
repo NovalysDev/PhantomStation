@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -13,6 +13,68 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+
+// Separate, bounded diagnostics for each game and launch. Keep draining the
+// process even if the log cannot be written, otherwise its pipe can fill.
+static class PhantomGameJournal {
+    const long Limit = 8000000;
+    public static string NewSession(string root, string title, string id, int attempt) {
+        Guid parsed;
+        if (!Guid.TryParseExact(id ?? "", "N", out parsed)) throw new ArgumentException("Identité du jeu invalide.");
+        var clean = new StringBuilder();
+        foreach (char c in title ?? "")
+            clean.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 || Char.IsControl(c) ? '_' : c);
+        string name = clean.ToString().Trim().TrimEnd('.');
+        if (name.Length > 70) name = name.Substring(0, 70).TrimEnd(' ', '.');
+        if (name.Length == 0) name = "Jeu";
+        string folder = Path.Combine(root, "Jeux", name + " - " + parsed.ToString("N"));
+        Directory.CreateDirectory(folder);
+        return Path.Combine(folder, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff") +
+            "-essai-" + attempt + "-" + Guid.NewGuid().ToString("N"));
+    }
+    public static string Drain(TextReader reader, string path, string heading, bool keepTail) {
+        StreamWriter writer = null;
+        var tail = new StringBuilder();
+        try {
+            if (!String.IsNullOrEmpty(path)) {
+                try {
+                    writer = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), Encoding.UTF8);
+                    writer.WriteLine(heading); writer.Flush();
+                } catch (IOException) { if (writer != null) writer.Dispose(); writer = null; }
+                  catch (UnauthorizedAccessException) { if (writer != null) writer.Dispose(); writer = null; }
+            }
+            string line;
+            while ((line = reader.ReadLine()) != null) {
+                if (keepTail) {
+                    tail.AppendLine(line);
+                    if (tail.Length > 16000) tail.Remove(0, tail.Length - 16000);
+                }
+                if (!keepTail && (line.StartsWith("[CH2-DMA]") || line.StartsWith("[HEARTBEAT]"))) continue;
+                if (writer == null) continue;
+                try {
+                    if (writer.BaseStream.Length >= Limit) {
+                        writer.Dispose(); writer = null;
+                        File.Copy(path, path + ".precedent", true);
+                        writer = new StreamWriter(new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read), Encoding.UTF8);
+                        writer.WriteLine(heading + " (suite)");
+                    }
+                    writer.WriteLine(line); writer.Flush();
+                } catch (IOException) { if (writer != null) writer.Dispose(); writer = null; }
+                  catch (UnauthorizedAccessException) { if (writer != null) writer.Dispose(); writer = null; }
+            }
+        } finally { if (writer != null) writer.Dispose(); }
+        return tail.ToString();
+    }
+    public static string Session(int attempt) {
+        try {
+            return NewSession(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                              "PhantomStation", "Journaux"), UniqueLauncher.PreparedGameTitle,
+                              UniqueLauncher.PreparedGameId, attempt);
+        } catch (IOException) { return null; }
+          catch (UnauthorizedAccessException) { return null; }
+          catch (ArgumentException) { return null; }
+    }
+}
 
 // The appended ZIP contains the game files. The per-package cache retains
 // runtime settings; default saves are stored in the user's Documents folder.
@@ -115,6 +177,7 @@ class UniqueLauncher : Form {
     readonly string gameTitle;
     readonly IntPtr parentWindow;
     public static string PreparedGameTitle;
+    public static string PreparedGameId;
     public static bool PreparedDocumentsSaves;
     bool started;
 
@@ -315,6 +378,7 @@ class UniqueLauncher : Form {
             PreparedDocumentsSaves = lines.Length > 4 && lines[4].Trim() == "documents-saves-v1";
             var expectedHash = lines.Length > 2 ? lines[2].Trim() : "";
             Guid parsed; if (!Guid.TryParseExact(id, "N", out parsed) || Path.GetFileName(exe) != exe || (expectedHash.Length != 0 && (expectedHash.Length != 64 || !System.Text.RegularExpressions.Regex.IsMatch(expectedHash, "^[0-9a-f]+$")))) throw new Exception("Identité du jeu invalide.");
+            PreparedGameId = id;
             string titleFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PhantomStation", "Titres", id + ".txt");
             if (File.Exists(titleFile)) {
                 var info = new FileInfo(titleFile);
@@ -475,7 +539,8 @@ class PreparingForm : Form {
         }
         try {
             string game = task.Result;
-            var start = new ProcessStartInfo(game) { WorkingDirectory = Path.GetDirectoryName(game), UseShellExecute = false };
+            var start = new ProcessStartInfo(game) { WorkingDirectory = Path.GetDirectoryName(game), UseShellExecute = false,
+                RedirectStandardOutput = true, RedirectStandardError = true };
             string intro = Path.Combine(Path.GetDirectoryName(game), "phantom-intro.exe");
             start.EnvironmentVariables["PHANTOM_SPLASH_EXE"] = File.Exists(intro) ? intro : Application.ExecutablePath;
             start.EnvironmentVariables["PHANTOM_GAME_TITLE"] = UniqueLauncher.PreparedGameTitle;
@@ -495,22 +560,30 @@ class PreparingForm : Form {
                 });
                 foregroundThread.IsBackground = true;
                 foregroundThread.Start();
+                string journal = PhantomGameJournal.Session(1);
+                string heading = "Jeu : " + UniqueLauncher.PreparedGameTitle + " | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                var stdout = process.StandardOutput; var stderr = process.StandardError;
+                var outputTask = Task.Run(() => PhantomGameJournal.Drain(stdout, journal == null ? null : journal + "-moteur.log", heading, false));
+                var errorTask = Task.Run(() => PhantomGameJournal.Drain(stderr, journal == null ? null : journal + "-erreurs.log", heading, true));
                 Hide();
-                WatchGame(process, game);
+                WatchGame(process, game, outputTask, errorTask);
                 return;
             }
         } catch (Exception ex) { PhantomLaunchReport.Show(this, ex, UniqueLauncher.PackagePath); }
         Close();
     }
-    async void WatchGame(Process process, string executable) {
+    async void WatchGame(Process process, string executable, Task<string> outputTask, Task<string> errorTask) {
         try {
             await Task.Run(() => process.WaitForExit());
+            await outputTask;
+            string error = await errorTask;
             int code = process.ExitCode;
             // Normal closure, including a Ctrl+C exit, is not a crash.
             if (code != 0 && unchecked((uint)code) != 0xC000013Au) {
                 string message = PhantomLanguage.English
                     ? "The game stopped unexpectedly (exit code 0x" + unchecked((uint)code).ToString("X8") + ")."
                     : "Le jeu s’est arrêté de façon inattendue (code 0x" + unchecked((uint)code).ToString("X8") + ").";
+                if (!String.IsNullOrWhiteSpace(error)) message += "\n\n" + error.Trim();
                 PhantomLaunchReport.Show(this, new InvalidOperationException(message), executable, true);
             }
         } catch (Exception ex) {

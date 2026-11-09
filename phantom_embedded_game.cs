@@ -141,40 +141,18 @@ class PhantomEmbeddedGame {
                 LogLaunch(owner.Text + " : démarrage, essai " + attempt);
                 using (running = Process.Start(game)) {
                     if (running == null) throw new InvalidOperationException("Le jeu n’a pas démarré.");
-                    var errorOutput = running.StandardError.ReadToEndAsync();
-                    // Keep what the experimental engine prints: list sizes, Maple
-                    // reads and texture failures are the only clues when a scene
-                    // draws nothing. Bounded so a long session cannot fill the disk.
-                    var engineLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                                 "PhantomStation", "Journaux", "jeu-moteur.log");
+                    string journal = PhantomGameJournal.Session(attempt);
+                    string heading = "Jeu : " + UniqueLauncher.PreparedGameTitle + " | " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " | essai " + attempt;
+                    var errorStream = running.StandardError;
+                    var errorOutput = Task.Run(() => PhantomGameJournal.Drain(errorStream, journal == null ? null : journal + "-erreurs.log", heading, true));
                     var standardOutput = running.StandardOutput;
-                    var pumpOutput = Task.Run(() => {
-                        try {
-                            Directory.CreateDirectory(Path.GetDirectoryName(engineLog));
-                            StreamWriter writer = new StreamWriter(engineLog, false);
-                            try {
-                                string line;
-                                while ((line = standardOutput.ReadLine()) != null) {
-                                    /* Les trames DMA et le battement de coeur noyaient tout
-                                     * le reste : 4 Mo partaient en quatre minutes et la fin
-                                     * de la partie, les combats, n'etait jamais enregistree. */
-                                    if (line.StartsWith("[CH2-DMA]") || line.StartsWith("[HEARTBEAT]")) continue;
-                                    if (writer.BaseStream.Length >= 8000000) {
-                                        writer.Dispose();
-                                        try { File.Copy(engineLog, engineLog + ".precedent", true); } catch (IOException) { }
-                                        writer = new StreamWriter(engineLog, false);
-                                    }
-                                    writer.WriteLine(line);
-                                    writer.Flush();
-                                }
-                            } finally { writer.Dispose(); }
-                        } catch (IOException) { } catch (UnauthorizedAccessException) { }
-                    });
+                    var pumpOutput = Task.Run(() => PhantomGameJournal.Drain(standardOutput, journal == null ? null : journal + "-moteur.log", heading, false));
                     bool attached = await Attach(running);
                     // Some graphics backends refuse Windows parenting. Keep just one
                     // visible window in that case, and restore the launcher on exit.
                     if (!attached && !running.HasExited) owner.Hide();
                     await Task.Run(() => running.WaitForExit());
+                    await pumpOutput;
                     string error = (await errorOutput).Trim();
                     int exitCode = running.ExitCode;
                     LogLaunch(owner.Text + " : fin, code " + exitCode + ", durée " +

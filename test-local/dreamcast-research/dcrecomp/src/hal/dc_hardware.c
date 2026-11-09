@@ -1617,7 +1617,7 @@ void dc_maple_dma(DCHardware *hw, uint32_t mdstar) {
                     break;
 
                 case 0x09: { /* MDC_GetCondition */
-                    uint16_t buttons = (uint16_t)(ctrl->buttons & (uint16_t)~dc_cinematic_buttons());
+                    uint16_t buttons = (uint16_t)(ctrl->buttons & (uint16_t)~(port == 0 ? dc_cinematic_buttons() : 0));
                     if (getenv("DCRECOMP_TEST_MAPLE_INPUT") && buttons != 0xffffu)
                         fprintf(stderr,"[TEST-MAPLE] port=%u buttons=%04X\n",port,buttons);
                     /* Request data[1] = function type to query */

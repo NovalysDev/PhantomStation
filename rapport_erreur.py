@@ -8,6 +8,7 @@ import urllib.request
 import uuid
 import traceback
 import platform
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -107,10 +108,24 @@ def send_report(payload, endpoint=REPORT_ENDPOINT, timeout=15):
         raise OSError('Impossible de joindre le service de rapport.') from exc
 
 
+def _delivery_status(message, reset=False):
+    """Keep a small, address-free trace of the most recent sending attempt."""
+    try:
+        folder = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local')) / 'PhantomStation' / 'Journaux'
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / 'envoi-rapport.log'
+        with path.open('w' if reset else 'a', encoding='utf-8') as out:
+            out.write(datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %z') + ' ' + message + '\n')
+    except OSError:
+        pass
+
+
 def send_game_diagnostic(payload, archive, endpoint=REPORT_ENDPOINT, timeout=30):
     """Send the complete ZIP only after the relay confirms attachment support."""
+    _delivery_status('Début de l’envoi du diagnostic.', reset=True)
     archive = Path(archive)
     if not archive.is_file() or archive.stat().st_size > 8 * 1024 * 1024:
+        _delivery_status('Diagnostic introuvable ou supérieur à la limite de 8 Mio.')
         raise ValueError('Diagnostic introuvable ou trop volumineux (8 Mio maximum).')
     parsed = urllib.parse.urlsplit(endpoint)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
@@ -127,15 +142,25 @@ def send_game_diagnostic(payload, archive, endpoint=REPORT_ENDPOINT, timeout=30)
                 raise OSError('Réponse du service de rapport invalide.')
             return json.loads(raw.decode('utf-8'))
     try:
+        _delivery_status('Vérification du service.')
         probe = request({'diagnostic_probe': True})
         if not isinstance(probe, dict) or probe.get('diagnostic_complet') != 1:
+            _delivery_status('Service incompatible avec les diagnostics complets.')
             raise OSError('Le service ne prend pas encore en charge les diagnostics complets.')
         data = dict(payload)
         data['diagnostic_b64'] = base64.b64encode(archive.read_bytes()).decode('ascii')
+        _delivery_status('Transmission du diagnostic.')
         result = request(data)
         if not isinstance(result, dict) or result.get('diagnostic_recu') is not True:
+            _delivery_status('Réception du diagnostic non confirmée.')
             raise OSError('La réception du fichier complet n’a pas été confirmée.')
+        _delivery_status('Réception confirmée par le service.')
     except urllib.error.HTTPError as exc:
+        _delivery_status('Service : erreur HTTP ' + str(exc.code) + '.')
         raise OSError('Le service a refusé le diagnostic (code ' + str(exc.code) + ').') from exc
     except (urllib.error.URLError, TimeoutError, UnicodeError, ValueError) as exc:
+        _delivery_status('Échec de connexion ou réponse invalide (' + type(exc).__name__ + ').')
         raise OSError('Impossible de transmettre le diagnostic complet.') from exc
+    except OSError:
+        _delivery_status('Envoi interrompu ou réponse non confirmée.')
+        raise

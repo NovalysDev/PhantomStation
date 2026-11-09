@@ -45,6 +45,7 @@ class DiagnosticClosureTests(unittest.TestCase):
         with patch.object(bibliotheque, 'game_running', return_value=False), \
              patch.object(diagnostic_jeu, 'game_save_files', return_value=[]), \
              patch.object(diagnostic_jeu, 'create_game_diagnostic', return_value=(Path('report.zip'), 'text')) as create, \
+             patch('rapport_erreur._delivery_status'), \
              patch.object(phantom_report_ui, 'open_report_dialog', return_value=None) as dialog:
             view.root.callbacks.pop()()
         self.assertTrue(create.call_args.kwargs['include_blocks'])

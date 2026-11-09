@@ -336,6 +336,8 @@ class GameInCompiler:
                 raise ValueError('Le jeu est encore ouvert. Ferme-le avant de créer son rapport.')
             saves = game_save_files(info, selection) if include_save else []
             path, text = create_game_diagnostic(info, description, save_files=saves, include_blocks=include_blocks)
+            from rapport_erreur import _delivery_status
+            _delivery_status('Rapport préparé ; ouverture de la fenêtre d’envoi.', reset=True)
             dialog = open_report_dialog(self.root, {'path': path, 'text': text, 'game': info['name'],
                                                     'kind': 'jeu', 'attachment': True, 'auto_send': True})
             if dialog is not None:

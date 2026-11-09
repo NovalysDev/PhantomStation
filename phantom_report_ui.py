@@ -100,7 +100,8 @@ def open_report_dialog(parent, failure):
                 failure['send_error'] = 'Une erreur inattendue a empêché l’envoi.'
             finally:
                 failure['sending'] = False
-        threading.Thread(target=worker, daemon=True).start()
+        # Finish an already-confirmed send even if the player closes the UI.
+        threading.Thread(target=worker, daemon=False).start()
         dialog.after(100, poll_send)
 
     button(actions, 'Ouvrir le dossier', open_folder, width=130).pack(side='left')
@@ -119,5 +120,5 @@ def open_report_dialog(parent, failure):
     dialog.transient(parent)
     dialog.lift()
     if failure.get('auto_send'):
-        dialog.after(100, transmit)
+        transmit()
     return dialog

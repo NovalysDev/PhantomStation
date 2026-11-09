@@ -22,6 +22,8 @@ The latest test build improves handling of special characters in build paths, au
 
 Press **F10** during a game opened from the library, or after returning to PhantomStation. Describe the problem and choose whether to include the save and, for Dreamcast, any recorded memory blocks. After confirmation, the game closes before its final log is collected and the report is sent. Shared memory cards may contain other games' saves, and recorded blocks may contain game-memory data. The receiving address is not shown. One bounded log is kept per game and replaced at its next launch. F10 is also passed to the game, so a game that already uses F10 can react to it.
 
+If sending fails, `%LOCALAPPDATA%\PhantomStation\Journaux\envoi-rapport.log` records the last transmission attempt without an email address.
+
 ## What it does
 
 - Select a console, provide a game image, choose a title and output folder, and start the build.

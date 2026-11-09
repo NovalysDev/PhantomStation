@@ -159,6 +159,41 @@ def table_pointers(data: bytes, base: int) -> set[int]:
     return found
 
 
+def indexed_table_pointers(data: bytes, base: int) -> set[int]:
+    """Find indexed callback tables that alternate small IDs and code pointers.
+
+    Require a run of increasing IDs and several plausible function starts;
+    random data must not become an entry and split an existing function.
+    Pointers to a separately loaded program can occur in the same table but
+    are left to that program's own translation and RAM signature.
+    """
+    lo, hi = base & 0x1FFFFFFF, (base & 0x1FFFFFFF) + len(data)
+    good = _function_start(data)
+    words = [int.from_bytes(data[i:i+4], 'little') for i in range(0, len(data)-3, 4)]
+    found = set()
+    i = 0
+    while i + 1 < len(words):
+        j, previous, targets = i, -1, []
+        while j + 1 < len(words):
+            key, raw = words[j], words[j+1]
+            addr = raw & 0x1FFFFFFF
+            if (key > 255 or key <= previous or raw >> 29 not in (0, 4, 5) or
+                    not 0x0C000000 <= addr < 0x0D000000 or addr & 1):
+                break
+            previous = key
+            targets.append(addr)
+            j += 2
+        if len(targets) >= 4:
+            inside = [addr for addr in targets if lo <= addr < hi]
+            sure = [addr for addr in inside if plausible_entry(data, addr-lo, False) and good(addr-lo)]
+            if len(sure) >= 3 and len(sure) * 4 >= len(inside) * 3:
+                found.update(addr | 0x80000000 for addr in sure)
+            i = j
+        else:
+            i += 1
+    return found
+
+
 def block_pointers(blocks: list[dict], boot: bytes) -> set[int]:
     """Main-program functions the programs read from the disc point at.
 
@@ -326,6 +361,7 @@ def translate_block(block: dict, work: Path, recompile, stage: Path, translator:
     if block.get('disc'):
         targets |= code_constants(block['data'], block['base'])
         targets |= table_pointers(block['data'], block['base'])
+        targets |= indexed_table_pointers(block['data'], block['base'])
     targets_text = ''.join(f'0x{t:08X}\n' for t in sorted(targets))
     marker = out / 'cibles.txt'
     stamp = f'# {translator}\n' + targets_text

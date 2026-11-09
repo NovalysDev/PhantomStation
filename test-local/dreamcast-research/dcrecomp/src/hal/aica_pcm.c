@@ -235,6 +235,61 @@ static const uint8_t *g_ram;   /* dernière mémoire son vue, pour décoder au d
 
 static unsigned g_courts, g_kyons, g_fins;
 
+/* Same-build mixer section only. This omits sound registers, sound RAM, ARM7,
+ * queued host audio, and all other devices. It cannot resume a game alone. */
+typedef struct {
+    uint32_t magic, version, voice_size, mvol, mono, checksum;
+    Voie channels[CHANNELS];
+} PcmCheckpoint;
+
+static uint32_t pcm_checkpoint_hash(const uint8_t *data, size_t size) {
+    uint32_t hash = 2166136261u;
+    while (size--) { hash ^= *data++; hash *= 16777619u; }
+    return hash;
+}
+
+size_t aica_pcm_checkpoint_size(void) { return sizeof(PcmCheckpoint); }
+
+int aica_pcm_checkpoint_capture(void *buffer, size_t size) {
+    if (!buffer || size != sizeof(PcmCheckpoint)) return 0;
+    PcmCheckpoint image;
+    memset(&image, 0, sizeof image);
+    image.magic=0x504d4341u; image.version=1; image.voice_size=sizeof(Voie);
+    image.mvol=g_mvol; image.mono=g_mono;
+    for (int i=0; i<CHANNELS; ++i) {
+        const Voie *s=&voies[i]; Voie *d=&image.channels[i];
+        d->active=s->active; d->ca=s->ca; d->frac=s->frac;
+        d->s0=s->s0; d->s1=s->s1; d->quant=s->quant;
+        d->loop_quant=s->loop_quant; d->loop_s0=s->loop_s0; d->in_loop=s->in_loop;
+        d->looped=s->looped; d->joues=s->joues; d->eg=s->eg; d->etat=s->etat;
+        d->lfo_compte=s->lfo_compte; d->lfo_pas=s->lfo_pas;
+        d->bruit=s->bruit; d->lea=s->lea;
+    }
+    image.checksum=pcm_checkpoint_hash((const uint8_t *)&image, sizeof image);
+    memcpy(buffer, &image, sizeof image);
+    return 1;
+}
+
+int aica_pcm_checkpoint_restore(const void *buffer, size_t size, const uint8_t *sound_ram) {
+    if (!buffer || !sound_ram || size != sizeof(PcmCheckpoint)) return 0;
+    PcmCheckpoint image;
+    memcpy(&image, buffer, sizeof image);
+    uint32_t expected=image.checksum;
+    image.checksum=0;
+    if (image.magic != 0x504d4341u || image.version != 1 || image.voice_size != sizeof(Voie) ||
+        image.mvol > 15 || image.mono > 1 ||
+        expected != pcm_checkpoint_hash((const uint8_t *)&image, sizeof image)) return 0;
+    for (int i=0; i<CHANNELS; ++i) {
+        const Voie *c=&image.channels[i];
+        if ((c->active != 0 && c->active != 1) || c->etat < ATTAQUE || c->etat > RELACHE ||
+            (c->in_loop != 0 && c->in_loop != 1) || (c->looped != 0 && c->looped != 1)) return 0;
+    }
+    tables();
+    memcpy(voies, image.channels, sizeof voies);
+    g_mvol=image.mvol; g_mono=image.mono; g_ram=sound_ram;
+    return 1;
+}
+
 void aica_pcm_key_execute(uint32_t *r) {
     tables();
     for (int ch = 0; ch < CHANNELS; ++ch) {

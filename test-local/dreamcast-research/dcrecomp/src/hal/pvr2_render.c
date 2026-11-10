@@ -188,6 +188,9 @@ static GLuint compile_shader(GLenum type, const char *source) {
     return shader;
 }
 
+
+static void osd_init(void);
+
 int pvr2_render_init(int width, int height) {
     g_width = width;
     g_height = height;
@@ -291,6 +294,10 @@ int pvr2_render_init(int width, int height) {
     glEnable(GL_DEPTH_TEST);
     glClearDepth(0.0);
     glDepthFunc(GL_GEQUAL);
+
+    /* Prepare the tiny text renderer at startup, not in the middle of movie
+     * playback where shader compilation could interrupt audio. */
+    osd_init();
 
     printf("[PVR2] Renderer initialized (%dx%d)\n", width, height);
     return 0;
@@ -645,7 +652,6 @@ static void osd_quad(OsdSommet *v, int *k, float x, float y, float w, float h,
 void pvr2_osd_frame(void) {
     const char *texte = dc_cinematic_message();
     if (!texte || !*texte) return;
-    osd_init();
     if (!g_osd_shader) return;
 
     int vx = 0, vy = 0, vw = g_width, vh = g_height;
@@ -654,18 +660,18 @@ void pvr2_osd_frame(void) {
     glViewport(vx, vy, vw, vh);
 
     int n = (int)strlen(texte);
+    if (n > 64) n = 64;
     while (n > 0 && texte[n - 1] == ' ') --n;
     if (n <= 0) return;
 
-    int s = vh >= 900 ? 5 : (vh >= 600 ? 4 : 3);
+    int s = vh >= 900 ? 4 : (vh >= 600 ? 3 : 2);
     int txt_w = n * 6 * s - s;
     int txt_h = 7 * s;
     float px = 2.0f / (float)vw, py = 2.0f / (float)vh;
-    float x0 = (float)((vw - txt_w) / 2);
+    float x0 = (float)(vw - txt_w - 3 * s);
     float y0 = (float)(3 * s);
 
-    OsdSommet *v = (OsdSommet *)malloc(sizeof(OsdSommet) * 6u * (size_t)(n * 35 + 1));
-    if (!v) return;
+    OsdSommet v[6 * (64 + 1)];
 
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -680,7 +686,7 @@ void pvr2_osd_frame(void) {
     int k = 0;
     float tu = (float)((41 % OSD_COLS) * OSD_CW + 2) / (float)OSD_TEXW;
     float tv = (float)((41 / OSD_COLS) * OSD_CH + 4) / (float)OSD_TEXH;
-    osd_quad(v, &k, 0.0f, 0.0f, (float)vw, (float)(txt_h + 5 * s), tu, tv, tu, tv, px, py);
+    osd_quad(v, &k, x0 - 2 * s, 0.0f, (float)(txt_w + 4 * s), (float)(txt_h + 5 * s), tu, tv, tu, tv, px, py);
     glUniform4f(g_osd_couleur, 0.0f, 0.0f, 0.0f, 0.55f);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(k * (int)sizeof(OsdSommet)), v, GL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, k);
@@ -690,25 +696,14 @@ void pvr2_osd_frame(void) {
         int g = osd_index(texte[i]);
         int cx = (g % OSD_COLS) * OSD_CW, cy = (g / OSD_COLS) * OSD_CH;
         float gx = x0 + (float)(i * 6 * s);
-        for (int r = 0; r < 7; ++r) {
-            unsigned bits = osd_glyphes[g][r];
-            if (!bits) continue;
-            for (int c = 0; c < 5; ++c) {
-                if (!(bits & (1u << (4 - c)))) continue;
-                float u0 = (float)(cx + c) / (float)OSD_TEXW;
-                float u1 = (float)(cx + c + 1) / (float)OSD_TEXW;
-                float v0 = (float)(cy + (7 - r)) / (float)OSD_TEXH;
-                float v1 = (float)(cy + (7 - r) + 1) / (float)OSD_TEXH;
-                osd_quad(v, &k, gx + (float)(c * s), y0 + (float)((6 - r) * s),
-                         (float)s, (float)s, u0, v0, u1, v1, px, py);
-            }
-        }
+        float u0 = (float)cx / OSD_TEXW, u1 = (float)(cx + 5) / OSD_TEXW;
+        float v0 = (float)(cy + 1) / OSD_TEXH, v1 = (float)(cy + 8) / OSD_TEXH;
+        osd_quad(v, &k, gx, y0, (float)(5 * s), (float)(7 * s), u0, v0, u1, v1, px, py);
     }
     glUniform4f(g_osd_couleur, 1.0f, 1.0f, 0.80f, 1.0f);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(k * (int)sizeof(OsdSommet)), v, GL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, k);
 
-    free(v);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUseProgram(0);
@@ -719,6 +714,12 @@ void pvr2_render_frame(void) {
     static unsigned dbg_frame=0; static int dbg_at=-1;
     if(dbg_at<0) { const char *x=getenv("DCRECOMP_TRACE_GEOM_FRAME"); dbg_at=x?atoi(x):0; }
     ++dbg_frame;
+    /* A compact sample every 600 frames helps identify broken large textures
+     * in ordinary game reports without dumping image data or every polygon. */
+    int diag_frame = (dbg_frame % 600u) == 0u;
+    unsigned diag_textures=0, diag_invalid=0, diag_vq=0, diag_palette=0;
+    uint32_t diag_tsp=0, diag_tcw=0, diag_pcw=0;
+    float diag_area=0;
     glBindFramebuffer(GL_FRAMEBUFFER,g_render_fbo);
     glViewport(0,0,g_render_width,g_render_height);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -826,6 +827,28 @@ void pvr2_render_frame(void) {
                 if (fresh) { g_textures[k].seen = g_texture_frame; dc_ralentis_fin(RAL_TEXTURES); }
                 w = g_textures[k].w; h = g_textures[k].h;
                 textured = g_textures[k].valid; texture = g_textures[k].id;
+            }
+            if (diag_frame && (v->pcw & 8u)) {
+                ++diag_textures;
+                if (!textured) ++diag_invalid;
+                if (v->tcw & (1u << 30)) ++diag_vq;
+                unsigned format=(v->tcw >> 27) & 7u;
+                if (format==5u || format==6u) ++diag_palette;
+                float x0=v->x,x1=v->x,y0=v->y,y1=v->y;
+                for (int q=first+1; q<end; ++q) {
+                    if (vertices[q].x<x0) x0=vertices[q].x;
+                    if (vertices[q].x>x1) x1=vertices[q].x;
+                    if (vertices[q].y<y0) y0=vertices[q].y;
+                    if (vertices[q].y>y1) y1=vertices[q].y;
+                }
+                /* Exclude off-screen geometry from the reported size; some
+                 * games submit enormous coordinates for clipping. */
+                if (x0 < 0.0f) x0=0.0f;
+                if (x1 > 640.0f) x1=640.0f;
+                if (y0 < 0.0f) y0=0.0f;
+                if (y1 > 480.0f) y1=480.0f;
+                float area=(x1>x0 && y1>y0) ? (x1-x0)*(y1-y0) : 0.0f;
+                if (area>diag_area) { diag_area=area; diag_tsp=v->tsp; diag_tcw=v->tcw; diag_pcw=v->pcw; }
             }
             { static int on = -1; static float zx0=0,zy0=0,zx1=0,zy1=0; static int parsed; static float aire_min=-1;
               if (on < 0) { on = getenv("DCRECOMP_TRACE_ZONE") != NULL;
@@ -937,6 +960,12 @@ void pvr2_render_frame(void) {
             cursor = end;
         }
     }
+
+    if (diag_frame)
+        printf("[PVR-DIAG] frame=%u textures=%u invalides=%u vq=%u palette=%u "
+               "surface_max=%.0f pcw=%08X tsp=%08X tcw=%08X stride=%u palette_format=%u\n",
+               dbg_frame,diag_textures,diag_invalid,diag_vq,diag_palette,diag_area,
+               diag_pcw,diag_tsp,diag_tcw,(dc_hw_read32(hw,0x005f80e4u)&31u)*32u,palette_format);
 
     /* Reset state */
     glDepthMask(GL_TRUE);

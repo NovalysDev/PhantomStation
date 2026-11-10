@@ -45,6 +45,30 @@ typedef struct {
 static Voie voies[CHANNELS];
 static unsigned g_mvol = 15, g_mono;
 
+/* A short aggregate per 10 s helps distinguish input decoder clipping,
+ * an overloaded mix and audio dropouts without recording voices. */
+static struct {
+    uint64_t frames, voice_samples, voice_rail, adpcm_samples, adpcm_rail;
+    uint64_t dsp_only, limiter_frames, over_frames, output_near;
+    uint32_t mix_peak, output_peak;
+} g_diag;
+static uint64_t g_diag_total_frames;
+
+void aica_pcm_diagnostic_flush(void) {
+    if (!g_diag.frames && !g_diag.adpcm_samples) return;
+    printf("[AUDIO-DIAG] pos_ms=%llu frames=%llu mix_peak=%u limite=%llu "
+           "hors_plage=%llu sortie_peak=%u sortie_proche_max=%llu "
+           "voix=%llu voix_proche_max=%llu adpcm=%llu adpcm_sature=%llu dsp_seul=%llu\n",
+           (unsigned long long)(g_diag_total_frames * 1000u / 44100u),
+           (unsigned long long)g_diag.frames, g_diag.mix_peak,
+           (unsigned long long)g_diag.limiter_frames, (unsigned long long)g_diag.over_frames,
+           g_diag.output_peak, (unsigned long long)g_diag.output_near,
+           (unsigned long long)g_diag.voice_samples, (unsigned long long)g_diag.voice_rail,
+           (unsigned long long)g_diag.adpcm_samples, (unsigned long long)g_diag.adpcm_rail,
+           (unsigned long long)g_diag.dsp_only);
+    memset(&g_diag, 0, sizeof g_diag);
+}
+
 /* Atténuation en 1/16 de doublement (0,375 dB) -> gain x.15 ; >= 256 muet. */
 static int32_t tl_lut[1024];
 static int32_t volume_lut[16];
@@ -95,6 +119,8 @@ static void tables(void) {
 void aica_pcm_reset(void) {
     tables();
     memset(voies, 0, sizeof voies);
+    memset(&g_diag, 0, sizeof g_diag);
+    g_diag_total_frames = 0;
     for (int ch = 0; ch < CHANNELS; ++ch) { voies[ch].etat = RELACHE; voies[ch].eg = 0x3FF << EG_BITS; }
     g_mvol = 15; g_mono = 0;
 }
@@ -129,6 +155,8 @@ static int adpcm(unsigned nib, int prev, int *quant) {
     int d = (*quant * (int)(2 * (nib & 7u) + 1)) >> 3;
     if (d > 0x7FFF) d = 0x7FFF;
     int v = prev + ((nib & 8u) ? -d : d);
+    ++g_diag.adpcm_samples;
+    if (v < -32768 || v > 32767) ++g_diag.adpcm_rail;
     int q = (*quant * qs[nib & 7u]) >> 8;
     *quant = q < 127 ? 127 : q > 24576 ? 24576 : q;
     return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
@@ -348,7 +376,7 @@ static void enveloppe(Voie *c, uint32_t *v) {
  * coupure seche s'entendait comme une saturation. On garde une petite marge
  * avant le plafond, puis un coude doux arrondit les pics au lieu de les
  * tronquer. */
-#define MIX_MARGE  23170   /* 0,707 : -3 dB de marge, la place des voix */
+#define MIX_MARGE  20000   /* ~-4,3 dB : marge pour les cris et les effets superposés */
 #define MIX_SEUIL  24576   /* -2,5 dBFS : debut du coude */
 
 static int16_t limite(int64_t v) {
@@ -401,6 +429,8 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
             /* Sortie : échantillon interpolé, puis toutes les atténuations
              * additionnées (enveloppe, trémolo, volume, niveau, côté). */
             int sample = c->s0 + (int)(((int64_t)(c->s1 - c->s0) * (int64_t)c->frac) >> 10);
+            ++g_diag.voice_samples;
+            if (sample >= 32000 || sample <= -32000) ++g_diag.voice_rail;
             unsigned voff = (v[10] >> 6) & 1u;
             unsigned ofsatt = voff ? 0 : alfo + (unsigned)((c->eg >> EG_BITS) >> 2);
             if (ofsatt > 255) ofsatt = 255;
@@ -422,6 +452,7 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
                  * (effets), que nous n'avons pas. On le rend au centre, à son
                  * niveau d'envoi, plutôt que de le perdre. */
                 unsigned ds = tl + send_level[(v[8] >> 4) & 15u];
+                if ((v[8] >> 4) & 15u) ++g_diag.dsp_only;
                 if (ds > max_att) ds = max_att;
                 int64_t s = ((int64_t)sample * tl_lut[ofsatt + ds]) >> 15;
                 left += s; right += s;
@@ -489,7 +520,21 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
         if (g_mono) left = right = (left + right) / 2;
         left = (left * volume_lut[g_mvol]) >> 15;
         right = (right * volume_lut[g_mvol]) >> 15;
-        out[i * 2] = limite(left);
-        out[i * 2 + 1] = limite(right);
+        int16_t lout = limite(left), rout = limite(right);
+        out[i * 2] = lout;
+        out[i * 2 + 1] = rout;
+        int64_t la = left < 0 ? -left : left, ra = right < 0 ? -right : right;
+        int64_t peak = ((la > ra ? la : ra) * (int64_t)MIX_MARGE) >> 15;
+        unsigned lp = lout < 0 ? (unsigned)-(int)lout : (unsigned)lout;
+        unsigned rp = rout < 0 ? (unsigned)-(int)rout : (unsigned)rout;
+        unsigned op = lp > rp ? lp : rp;
+        if (peak > g_diag.mix_peak) g_diag.mix_peak = (uint32_t)peak;
+        if (op > g_diag.output_peak) g_diag.output_peak = op;
+        if (peak > MIX_SEUIL) ++g_diag.limiter_frames;
+        if (peak > 32767) ++g_diag.over_frames;
+        if (op >= 32000) ++g_diag.output_near;
+        ++g_diag.frames;
+        ++g_diag_total_frames;
     }
+    if (g_diag.frames >= 441000u) aica_pcm_diagnostic_flush();
 }

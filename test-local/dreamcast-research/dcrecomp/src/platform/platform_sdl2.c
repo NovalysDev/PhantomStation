@@ -8,6 +8,7 @@
 #include "recompiler/sh4_cpu.h"
 #include "hal/dc_hardware.h"
 #include "hal/dc_cinematic.h"
+#include "hal/aica_pcm.h"
 #include "hal/dc_cheats.h"
 #include "hal/dc_ralentis.h"
 #include "hal/pvr2.h"
@@ -58,6 +59,7 @@ int platform_init(int width, int height, const char *title) {
 }
 
 void platform_shutdown(void) {
+    aica_pcm_diagnostic_flush();
     printf("[PLATFORM] Shutdown after %llu frames\n",
            (unsigned long long)g_platform.frame_count);
 }
@@ -591,7 +593,8 @@ int platform_init(int width, int height, const char *title) {
 }
 
 void platform_shutdown(void) {
-    if (getenv("DCRECOMP_AUDIO_STATS") && g_audio_device) {
+    aica_pcm_diagnostic_flush();
+    if (g_audio_device) {
         uint64_t now_us=platform_get_ticks_us();
         uint64_t span=g_audio_first_us && now_us>g_audio_first_us ? now_us-g_audio_first_us : 0;
         if (g_audio_starve_start && now_us>g_audio_starve_start)
@@ -631,7 +634,10 @@ bool platform_poll_events(DCHardware *hw) {
             int c = fgetc(input);
             fclose(input);
             remove(test_input);
-            test_key = c == 'S' ? CONT_START : c == 'A' ? CONT_A : 0;
+            test_key = c == 'S' ? CONT_START : c == 'A' ? CONT_A :
+                       c == 'B' ? CONT_B : c == 'U' ? CONT_DPAD_UP :
+                       c == 'D' ? CONT_DPAD_DOWN : c == 'L' ? CONT_DPAD_LEFT :
+                       c == 'R' ? CONT_DPAD_RIGHT : 0;
             if (test_key) { g_keyboard_buttons &= ~test_key; test_key_until = key_now + 400; fprintf(stderr, "[TEST-FILE-INPUT] %c\n", c); }
         }
     }
@@ -738,18 +744,21 @@ bool platform_poll_events(DCHardware *hw) {
             switch (event.key.keysym.sym) {
             case SDLK_F11:
                 /* Active ou coupe les codes de triche charges. */
-                if (pressed) dc_cheats_toggle();
+                if (pressed && !event.key.repeat) dc_cheats_toggle();
                 break;
 
             case SDLK_F12:
-                /* Freeze what is on screen: a scene that draws the wrong thing
-                 * leaves no other trace than the picture itself. */
-                if (pressed) {
+                /* F12 toggles fullscreen. Shift+F12 keeps the diagnostic capture. */
+                if (pressed && !event.key.repeat && (event.key.keysym.mod & KMOD_SHIFT)) {
                     static int captures;
                     char chemin[256];
                     snprintf(chemin, sizeof chemin, "capture-%03d.ppm", ++captures);
                     pvr2_screenshot(chemin);
                     puts(chemin);
+                } else if (pressed && !event.key.repeat) {
+                    Uint32 flags = SDL_GetWindowFlags(g_window);
+                    SDL_SetWindowFullscreen(g_window,
+                        (flags & SDL_WINDOW_FULLSCREEN) ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                 }
                 break;
             case SDLK_UP:     bit = CONT_DPAD_UP; break;
@@ -818,7 +827,12 @@ void platform_swap_buffers(void) {
     { static int base_vue;
       if (!base_vue) { dc_cheats_set_base(SDL_GetBasePath()); base_vue = 1; } }
     dc_cheats_tick();
-    pvr2_osd_frame();   /* bandeau par-dessus l'image, avant l'echange */
+    extern void pvr2_osd_frame(void);
+    pvr2_osd_frame();
+    /* A test may capture the composed frame; normal games do not create files. */
+    { static int checked; static const char *shot;
+      if (!checked) { shot = getenv("DCRECOMP_TEST_OSD_SCREENSHOT"); checked = 1; }
+      if (shot && dc_cinematic_message()) { pvr2_screenshot(shot); shot = NULL; } }
     SDL_GL_SwapWindow(g_window);
     /* Optional stress test for occasional long rendering stalls. */
     static int stall=-1; static unsigned swaps;

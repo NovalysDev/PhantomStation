@@ -112,7 +112,23 @@ def install_codes(project):
         source = source.replace(include_anchor, '#include "phantom_codes.hpp"\n' + include_anchor, 1)
         source = source.replace(hook_anchor, RUNTIME + '\n' + hook_anchor, 1)
         source = source.replace(invoke, invoke + '\n    phantom_codes_tick();', 1)
-        main.write_text(source, encoding='utf-8', newline='\n')
+    if 'PHANTOM_CHEAT_HOTKEY_V1' not in source:
+        tick = 'static void phantom_codes_tick() {'
+        event = '            if (!key_repeat && host_keymap_match_event(HOST_KEYMAP_OPEN_LAUNCHER, key, scancode, mod) &&'
+        debug = 'debug_toggles_on() && debug_toggle_key((int)key, nullptr, 0))'
+        fullscreen = 'host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,\n                                             (int)key, (int)scancode,\n                                             (int)mod)) {'
+        if any(source.count(x) != 1 for x in (tick, event, debug, fullscreen)):
+            raise ValueError('Structure du moteur changée : raccourcis des codes impossibles à intégrer.')
+        source = source.replace(tick, 'static bool phantom_codes_enabled = true; // PHANTOM_CHEAT_HOTKEY_V1\n' + tick + '\n    if (!phantom_codes_enabled) return;', 1)
+        source = source.replace(event, '''            if (!key_repeat && key == SDLK_F11 && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT))) {
+                phantom_codes_enabled = !phantom_codes_enabled;
+                host_osd_push(phantom_codes_enabled ? "Codes ON" : "Codes OFF", 1500);
+                continue;
+            }
+''' + event, 1)
+        source = source.replace(debug, '(key != SDLK_F12 || (mod & KMOD_SHIFT)) && debug_toggles_on() && debug_toggle_key((int)key, nullptr, 0))', 1)
+        source = source.replace(fullscreen, '((key == SDLK_F12 && !(mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT))) ||\n                      host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,\n                                             (int)key, (int)scancode,\n                                             (int)mod))) {', 1)
+    main.write_text(source, encoding='utf-8', newline='\n')
     ui = project / 'recomp-ui/src/common/backends/imgui/launcher_imgui.cpp'
     source = ui.read_text(encoding='utf-8')
     if MARKER not in source:

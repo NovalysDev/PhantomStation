@@ -146,6 +146,7 @@ ENGLISH = {
     'Le raccourci F10 est indisponible. Utilise le bouton Signaler un bug.': 'F10 is unavailable. Use the Report a bug button.',
     'Signaler un bug': 'Report a bug', 'Que se passe-t-il et à quel moment ?': 'What happens and when?',
     'F10 : signaler un bug': 'F10: report a bug',
+    'F11 : activer/désactiver les codes': 'F11: toggle cheats',
     'Sauvegarde du jeu': 'Game save', 'Blocs Dreamcast': 'Dreamcast memory blocks',
     'Joindre la sauvegarde ou les cartes actuellement utilisées ?\n\nUne carte partagée peut aussi contenir des sauvegardes d’autres jeux.\nOui : joindre les sauvegardes. Non : envoyer le journal seul.': 'Include the current save or memory cards?\n\nA shared card may also contain saves from other games.\nYes: include saves. No: send only the log.',
     'Joindre les blocs de mémoire enregistrés pour les parties du jeu qui ne fonctionnent pas encore ?\n\nIls peuvent contenir des données présentes dans la mémoire du jeu.\nOui : les joindre. Non : envoyer sans ces blocs.': 'Include the recorded memory blocks for game code that does not work yet?\n\nThey may contain data from game memory.\nYes: include them. No: send without them.',

@@ -14,6 +14,8 @@ uint32_t aica_pcm_status_ex(unsigned channel, int clear);
 int aica_pcm_channel_active(unsigned channel);
 void aica_pcm_mix(uint32_t *registers, const uint8_t *ram,
                   int16_t *stereo, size_t frames);
+/* Aggregate numeric diagnostics only; never records sound samples. */
+void aica_pcm_diagnostic_flush(void);
 /* Internal component of a future complete checkpoint, not a game save. The
  * caller must stop the mixer and restore sound registers and RAM separately.
  * The supplied sound RAM must remain alive while the mixer is in use. */

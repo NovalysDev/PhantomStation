@@ -104,3 +104,7 @@ add_executable(arm7_selftest tests/arm7_selftest.c)
 target_include_directories(arm7_selftest PRIVATE include)
 enable_testing()
 add_test(NAME arm7 COMMAND arm7_selftest)
+
+add_executable(dc_cinematic_start_test tests/dc_cinematic_start_test.c src/hal/dc_cinematic.c)
+target_include_directories(dc_cinematic_start_test PRIVATE include)
+add_test(NAME dc_cinematic_start COMMAND dc_cinematic_start_test)

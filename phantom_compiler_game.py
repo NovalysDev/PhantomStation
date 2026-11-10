@@ -143,6 +143,8 @@ class GameInCompiler:
         toolbar.pack(fill='x')
         button(toolbar, '← Retour au compilateur', self.close_game, width=200).pack(side='left', padx=10, pady=6)
         ctk.CTkLabel(toolbar, text=tr('F10 : signaler un bug'), text_color=MUTED).pack(side='right', padx=12)
+        if info.get('platform') == 'DC':
+            ctk.CTkLabel(toolbar, text=tr('F11 : activer/désactiver les codes'), text_color=MUTED).pack(side='right', padx=12)
         if self.trial_hash:
             ctk.CTkLabel(toolbar, text=tr('VERSION D’ESSAI DU JEU'), text_color='#f7c66b').pack(side='right', padx=12)
         self.status = tk.StringVar(value=tr('Ouverture du jeu…'))

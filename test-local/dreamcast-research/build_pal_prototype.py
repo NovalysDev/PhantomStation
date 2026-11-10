@@ -156,6 +156,10 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
         table=[]
         if learned.blocks: log(f'Traduction de {len(learned.blocks)} bloc(s) de code chargé(s) par le jeu…')
         for block in learned.blocks: table+=learn.translate_block(block,work,recompile,stage,translator)
+        if info['boot_sha1'] == GRANDIA_BOOT_SHA1:
+            import grandia_cinema
+            if grandia_cinema.apply(stage, info['boot_sha1']):
+                log('Grandia II : passage des vidéos avec Start activé.')
         # 1 TA buffer, 4 threads, 8 accurate P4, 16 interrupts through the
         # game's own vector (what it hangs off it only runs that way).
         learn.write_learned_table(stage,table); learn.patch_dispatch(stage); learn.write_profile(stage,irq,29)
@@ -220,6 +224,10 @@ def wire_learned(learned, work, game, env, boot, log):
         log(f'Traduction de {len(learned.blocks)} bloc(s) de code chargé(s) par le jeu…')
     for block in learned.blocks:
         table += learn.translate_block(block, work, recompile, game, translator)
+    if hashlib.sha1(boot).hexdigest() == GRANDIA_BOOT_SHA1:
+        import grandia_cinema
+        if grandia_cinema.apply(game, GRANDIA_BOOT_SHA1):
+            log('Grandia II : passage des vidéos avec Start activé.')
     learn.write_learned_table(game, table)
     learn.patch_dispatch(game)
     learn.dynamic_stubs(game)

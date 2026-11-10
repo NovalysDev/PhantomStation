@@ -1,7 +1,7 @@
 """Prepare Dreamcast learning candidates without changing a running game.
 
-A candidate is tried on the next launch. Its code is kept as the normal engine
-only after the player confirms that the affected passage actually worked.
+A candidate is tried on the next launch and kept after it has been used.
+Launching a game does not prove that a missing boss or scene now works.
 """
 from __future__ import annotations
 
@@ -307,7 +307,7 @@ def prepare(game, builder=None, smoke=None):
 
 
 def _merge_confirmed_profile(game, state, boot_id):
-    """Merge only the confirmed candidate, preserving later discoveries."""
+    """Merge the retained candidate, preserving later discoveries."""
     actual = _local() / 'Dreamcast-apprentissage' / boot_id
     actual.mkdir(parents=True, exist_ok=True)
     path = actual / 'profil.json'
@@ -346,7 +346,7 @@ def _merge_confirmed_profile(game, state, boot_id):
 
 
 def decide(game, expected_hash, accepted):
-    """Keep or discard the trial after the player has evaluated the passage."""
+    """Keep or discard a candidate after checking its identity and integrity."""
     cache, state = _paths(game)
     with _lock(game) as acquired:
         if not acquired: raise ValueError('L’apprentissage de ce jeu est encore en cours.')
@@ -388,7 +388,7 @@ def decide(game, expected_hash, accepted):
                 raise
             finally:
                 backup.unlink(missing_ok=True); pending.unlink(missing_ok=True); pending_marker.unlink(missing_ok=True)
-            _status(game, 'confirme', 'La version vérifiée par le joueur est conservée.')
+            _status(game, 'confirme', 'Version utilisée conservée ; le passage reste à vérifier en jeu.')
         else:
             rejected = _local() / 'Apprentissage-etat' / (_identity(game) + '-refuse.json')
             tmp = rejected.with_name(rejected.name + '.' + uuid.uuid4().hex + '.tmp')

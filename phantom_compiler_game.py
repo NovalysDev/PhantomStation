@@ -59,7 +59,6 @@ class GameInCompiler:
         self.trial_hash = None
         self.trial_token = None
         self.trial_log_stamp = None
-        self.pending_review = None
         self.debug_active = False
         self.root.bind_all('<F10>', self._compiler_f10, add='+')
 
@@ -317,21 +316,14 @@ class GameInCompiler:
         except (OSError, UnicodeError):
             return False
 
-    def _review_learning(self):
-        if not self.pending_review: return
-        info, expected = self.pending_review
-        self.pending_review = None
-        answer = messagebox.askyesnocancel(tr('Apprentissage Dreamcast'),
-            tr('As-tu atteint le passage qui posait problème et fonctionne-t-il avec la version d’essai ?\n\nOui : conserver cette version.\nNon : revenir au moteur précédent.\nAnnuler : je n’ai pas encore pu vérifier.'), parent=self.root)
-        if answer is None: return
+    def _continue_learning(self, info, expected):
+        """Keep the used candidate without claiming the passage was verified."""
         try:
             from phantom_dc_autolearn import decide
-            decide(info, expected, answer)
-            messagebox.showinfo(tr('Apprentissage Dreamcast'),
-                tr('Version confirmée et conservée.') if answer else tr('Version d’essai écartée ; le moteur précédent est conservé.'), parent=self.root)
+            decide(info, expected, True)
             self._queue_learning(info)
         except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
-            messagebox.showerror(tr('Apprentissage Dreamcast'), str(exc), parent=self.root)
+            self.on_learning(tr('Apprentissage impossible ; le moteur actuel est conservé.') + ' ' + str(exc))
 
     def _recover_last_game(self):
         """After reopening the compiler, find the latest registered game's log."""
@@ -450,8 +442,6 @@ class GameInCompiler:
             messagebox.showerror(tr('Rapport impossible'), str(exc), parent=self.root)
         finally:
             self.report_open = False
-            if self.pending_review:
-                self.root.after_idle(self._review_learning)
 
     def close_game(self):
         import time
@@ -482,12 +472,10 @@ class GameInCompiler:
         self.root.deiconify(); self.root.lift(); self.root.focus_force()
         used_trial = self._trial_was_used(info, token) if info and token else False
         if completed and info and trial and used_trial and self._journal_stamp(info) != stamp:
-            self.pending_review = (info, trial)
+            self._continue_learning(info, trial)
         elif completed and info and trial and not used_trial:
             self.on_learning(tr('Version d’essai non utilisée ; moteur habituel conservé.'))
         elif completed and info and not trial and not debug:
             self._queue_learning(info)
         if completed and self.pending_report:
             self.root.after_idle(self._send_pending_report)
-        elif completed and self.pending_review:
-            self.root.after_idle(self._review_learning)

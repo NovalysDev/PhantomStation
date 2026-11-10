@@ -24,7 +24,7 @@ Press **F10** during a game opened from the library, or after returning to Phant
 
 If sending fails, `%LOCALAPPDATA%\PhantomStation\Journaux\envoi-rapport.log` records the last transmission attempt without an email address.
 
-For Dreamcast games opened from the library, the compiler can prepare newly discovered code in the background after a game closes. It checks that a trial engine starts, then offers it on a later launch. After actually testing the affected area, the player can keep the trial, reject it and retain the previous engine, or defer the decision. The trial does not update a game during a running session, and a startup check does not prove that a boss appears.
+For Dreamcast games opened from the library, the compiler can prepare newly discovered code in the background after a game closes. It checks that a trial engine starts, then uses it on a later launch. After use it is retained automatically, allowing later discoveries to be prepared in turn. The trial does not update a game during a running session; neither starting nor retaining it proves that a boss appears.
 
 ## What it does
 

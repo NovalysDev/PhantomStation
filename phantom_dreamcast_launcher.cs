@@ -142,11 +142,8 @@ class DreamcastGameForm : Form {
             if(!File.Exists(boot)||!File.Exists(disc)) throw new FileNotFoundException(L("Données du jeu manquantes.","Game data is missing."));
             string runtime=TrialRuntime(game);
             string token=Environment.GetEnvironmentVariable("PHANTOM_DC_TRIAL_TOKEN");
-            if(runtime==Path.Combine(folder,"dreamcast-candidat.exe") &&
-               !String.IsNullOrEmpty(token) && System.Text.RegularExpressions.Regex.IsMatch(token,"^[0-9a-f]{32}$")) {
-                try { File.WriteAllText(Path.Combine(folder,"dreamcast-candidat-essai-"+token+".txt"),"ok"); }
-                catch(IOException) {} catch(UnauthorizedAccessException) {}
-            }
+            bool trialUsed=runtime==Path.Combine(folder,"dreamcast-candidat.exe") &&
+               !String.IsNullOrEmpty(token) && System.Text.RegularExpressions.Regex.IsMatch(token,"^[0-9a-f]{32}$");
             var start=new ProcessStartInfo(runtime) { WorkingDirectory=folder, UseShellExecute=false,
                 Arguments="\""+boot+"\" \""+disc+"\"" };
             string selectedCard=Environment.GetEnvironmentVariable("PHANTOM_SELECTED_DC_CARD");
@@ -188,6 +185,12 @@ class DreamcastGameForm : Form {
                 start.EnvironmentVariables["PHANTOM_DC_SON_ANALYSE"]="0";
             if(audio.Checked) start.EnvironmentVariables["PHANTOM_DC_AUDIO"]="1";
             await session.Run(start,true,fullscreen.Checked);
+            // Only retain a trial after the session returned without an error.
+            // This confirms neither the appearance of a boss nor game correctness.
+            if(trialUsed) {
+                try { File.WriteAllText(Path.Combine(folder,"dreamcast-candidat-essai-"+token+".txt"),"ok"); }
+                catch(IOException) {} catch(UnauthorizedAccessException) {}
+            }
         } catch(Exception ex) { PhantomLaunchReport.Show(this,ex,game,ex is PhantomGameCrashException); }
         finally { if(!IsDisposed) play.Enabled=true; }
     }

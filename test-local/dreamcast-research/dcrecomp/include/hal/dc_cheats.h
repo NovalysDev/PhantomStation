@@ -4,10 +4,15 @@
  *
  * Lit un fichier .cht au format RetroArch (celui de libretro-database pour
  * "Sega - Dreamcast", egalement lu par Flycast) et reapplique les codes
- * actives a la RAM SH-4. F11 coupe et remet les codes en jeu.
+ * actives a la RAM SH-4. F11 ouvre le menu de selection.
  */
 
 void dc_cheats_set_base(const char *base);   /* dossier de l'exe */
 void dc_cheats_tick(void);      /* a appeler une fois par image */
 void dc_cheats_toggle(void);    /* bascule actif/inactif */
 int  dc_cheats_active(void);    /* 1 si les codes sont appliques */
+void dc_cheats_menu_toggle(void);
+int dc_cheats_menu_is_open(void);
+void dc_cheats_menu_move(int direction);
+void dc_cheats_menu_select(void);
+const char *dc_cheats_menu_text(void);

@@ -312,8 +312,9 @@ class LibraryView(ctk.CTkFrame):
         dialog.title(('Saves — ' if load_language() == 'en' else 'Sauvegardes — ') + game['name'])
         dialog.configure(bg=BG)
         dialog.resizable(False, False)
+        dialog.geometry(f'650x{min(820, max(500, dialog.winfo_screenheight() - 100))}')
         set_window_icon(dialog)
-        outer = ctk.CTkFrame(dialog, fg_color=BG, corner_radius=0)
+        outer = ctk.CTkScrollableFrame(dialog, fg_color=BG, corner_radius=0)
         outer.pack(fill='both', expand=True, padx=20, pady=20)
         ctk.CTkLabel(outer, text=tr('SAUVEGARDES'), text_color='#6bdcec', font=('Segoe UI', 10, 'bold'), anchor='w').pack(fill='x')
         game_title = ctk.CTkLabel(outer, text=game['name'], text_color=TEXT, font=('Segoe UI', 22, 'bold'), anchor='w', wraplength=520)
@@ -327,6 +328,22 @@ class LibraryView(ctk.CTkFrame):
         ctk.CTkLabel(inner, text=tr('Une copie est créée avant de lancer depuis la bibliothèque.\nFerme le jeu avant de copier ou restaurer.'), text_color=MUTED, font=('Segoe UI', 11), anchor='w', justify='left').pack(fill='x', pady=(4, 10))
         button(inner, 'Ouvrir le dossier des sauvegardes', lambda: self.open_saves(game, dialog)).pack(fill='x', pady=3)
         button(inner, 'Créer une copie de secours', lambda: self.backup(game, dialog)).pack(fill='x', pady=3)
+        debug_panel = panel(outer)
+        debug_panel.pack(fill='x', pady=(0, 12))
+        debug_inner = ctk.CTkFrame(debug_panel, fg_color='transparent')
+        debug_inner.pack(fill='x', padx=18, pady=12)
+        ctk.CTkLabel(debug_inner, text=tr('Sauvegarde de débogage'), text_color=TEXT, font=('Segoe UI', 16, 'bold'), anchor='w').pack(fill='x')
+        ctk.CTkLabel(debug_inner, text=tr('Importe la sauvegarde d’un rapport pour tester ce jeu. Ta propre sauvegarde reste intacte.'),
+                     text_color=MUTED, font=('Segoe UI', 11), wraplength=500, justify='left', anchor='w').pack(fill='x', pady=(4, 6))
+        debug_status = tk.StringVar()
+        try:
+            import diagnostic_debug as debug
+            debug_status.set(tr('Débogage actif pour ce jeu') if debug.active(game) else tr('Aucune sauvegarde de débogage active'))
+        except (OSError, ValueError) as exc:
+            debug_status.set(str(exc))
+        ctk.CTkLabel(debug_inner, textvariable=debug_status, text_color='#f7c66b', anchor='w').pack(fill='x')
+        button(debug_inner, 'Importer un rapport pour tester', lambda: self.import_debug(game, dialog, debug_status)).pack(fill='x', pady=3)
+        button(debug_inner, 'Supprimer la sauvegarde de débogage', lambda: self.remove_debug(game, dialog, debug_status)).pack(fill='x', pady=3)
         page_label = tk.StringVar(value=''); selected_page = tk.StringVar(value='1')
         button(inner, 'Restaurer une copie de secours', lambda: self.restore(game, dialog, page_label, selected_page)).pack(fill='x', pady=3)
         try:
@@ -373,6 +390,37 @@ class LibraryView(ctk.CTkFrame):
         button(row, 'Changer de page', lambda: self.change_page(game, selected_page, page_label, dialog), primary=True, width=140).pack(side='left', padx=9)
         ctk.CTkLabel(row, textvariable=page_label, text_color=MUTED, font=('Segoe UI', 11)).pack(side='left')
         button(outer, 'Fermer', dialog.destroy, width=110).pack(anchor='e', pady=(14, 0))
+
+    def import_debug(self, game, parent, label):
+        path = filedialog.askopenfilename(parent=parent, title=tr('Choisir un rapport ou une sauvegarde'),
+            filetypes=[('Rapports et sauvegardes', '*.zip *.vmu *.bin *.mcd *.mcr *.mc *.ps2 *.sav *.srm *.state *.rrstate *.rrsram *.eep'), ('Tous les fichiers', '*.*')])
+        if not path: return
+        try:
+            import diagnostic_debug as debug
+            choices = debug.candidates(game, path)
+            if not choices: raise ValueError('Ce rapport ne contient pas de sauvegarde compatible avec cette console.')
+            if game['platform'] in cm.CARDS and len(choices) > 1:
+                listing = '\n'.join(f'{i + 1}. {name}' for i, name in enumerate(choices))
+                index = simpledialog.askinteger(tr('Choisir la carte'), listing, minvalue=1, maxvalue=len(choices), parent=parent)
+                if index is None: return
+                choices = [choices[index - 1]]
+            if not messagebox.askyesno(tr('Sauvegarde de débogage'),
+                tr('Utiliser une copie de cette sauvegarde pour tester ce jeu ? Vérifie que le rapport correspond au même jeu et à la même version.'), parent=parent): return
+            debug.install(game, path, choices)
+            label.set(tr('Débogage actif pour ce jeu'))
+            messagebox.showinfo(tr('Sauvegarde de débogage'), tr('Copie de débogage activée pour ce jeu. Ta sauvegarde habituelle sera réutilisée après suppression.'), parent=parent)
+        except (OSError, ValueError, KeyError, UnicodeError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+            messagebox.showerror(tr('Import impossible'), str(exc), parent=parent)
+
+    def remove_debug(self, game, parent, label):
+        if not messagebox.askyesno(tr('Sauvegarde de débogage'), tr('Supprimer la copie de débogage et reprendre ta sauvegarde habituelle ?'), parent=parent): return
+        try:
+            import diagnostic_debug as debug
+            debug.remove(game)
+            label.set(tr('Aucune sauvegarde de débogage active'))
+            messagebox.showinfo(tr('Sauvegarde de débogage'), tr('Copie supprimée. Ta sauvegarde habituelle sera utilisée au prochain lancement.'), parent=parent)
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            messagebox.showerror(tr('Suppression impossible'), str(exc), parent=parent)
 
     def change_page(self, game, selected, label, parent):
         try:

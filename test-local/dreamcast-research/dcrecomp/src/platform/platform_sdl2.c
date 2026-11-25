@@ -487,6 +487,10 @@ static void poll_pads(DCHardware *hw) {
     for (int i=0; i<4; ++i) {
         MapleController *c = dc_maple_get_controller(hw, i);
         if (!c) continue;
+        if (dc_cheats_menu_is_open()) {
+            c->buttons = 0xffff; c->ltrig = c->rtrig = 0; c->joyx = c->joyy = 0;
+            continue;
+        }
         c->buttons = i == 0 ? g_keyboard_buttons : 0xffff;
         c->ltrig = i == 0 ? g_key_ltrig : 0; c->rtrig = i == 0 ? g_key_rtrig : 0;
         c->joyx = c->joyy = 0;
@@ -634,6 +638,16 @@ bool platform_poll_events(DCHardware *hw) {
             int c = fgetc(input);
             fclose(input);
             remove(test_input);
+            if (c == 'M') {
+                SDL_Event key = {0}; key.type = SDL_KEYDOWN; key.key.keysym.sym = SDLK_F11;
+                SDL_PushEvent(&key); c = 0;
+            }
+            else if (dc_cheats_menu_is_open()) {
+                SDL_Event key = {0}; key.type = SDL_KEYDOWN;
+                key.key.keysym.sym = c == 'U' ? SDLK_UP : c == 'D' ? SDLK_DOWN : c == 'A' ? SDLK_RETURN : SDLK_UNKNOWN;
+                if (key.key.keysym.sym != SDLK_UNKNOWN) SDL_PushEvent(&key);
+                c = 0;
+            }
             test_key = c == 'S' ? CONT_START : c == 'A' ? CONT_A :
                        c == 'B' ? CONT_B : c == 'U' ? CONT_DPAD_UP :
                        c == 'D' ? CONT_DPAD_DOWN : c == 'L' ? CONT_DPAD_LEFT :
@@ -723,6 +737,14 @@ bool platform_poll_events(DCHardware *hw) {
             open_pad(event.cdevice.which, hw); break;
         case SDL_CONTROLLERDEVICEREMOVED:
             close_pad(event.cdevice.which, hw); break;
+        case SDL_CONTROLLERBUTTONDOWN:
+            if (dc_cheats_menu_is_open()) {
+                if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) dc_cheats_menu_move(-1);
+                else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) dc_cheats_menu_move(1);
+                else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A) dc_cheats_menu_select();
+                else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_B) dc_cheats_menu_toggle();
+            }
+            break;
         case SDL_WINDOWEVENT:
             if (event.window.event==SDL_WINDOWEVENT_SIZE_CHANGED) {
                 int w,h; SDL_GL_GetDrawableSize(g_window,&w,&h); pvr2_render_resize(w,h);
@@ -736,17 +758,28 @@ bool platform_poll_events(DCHardware *hw) {
         case SDL_KEYUP: {
             if (getenv("DCRECOMP_DEBUG_INPUT"))
                 fprintf(stderr,"[INPUT-KEY] type=%s sym=%d scan=%d\n",event.type==SDL_KEYDOWN?"down":"up",event.key.keysym.sym,event.key.keysym.scancode);
+            bool pressed = (event.type == SDL_KEYDOWN);
+            if (event.key.keysym.sym == SDLK_F11) {
+                if (pressed && !event.key.repeat) {
+                    dc_cheats_menu_toggle();
+                    g_keyboard_buttons = 0xffff;
+                }
+                break;
+            }
+            if (dc_cheats_menu_is_open()) {
+                if (pressed && !event.key.repeat) {
+                    if (event.key.keysym.sym == SDLK_UP) dc_cheats_menu_move(-1);
+                    else if (event.key.keysym.sym == SDLK_DOWN) dc_cheats_menu_move(1);
+                    else if (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_SPACE) dc_cheats_menu_select();
+                    else if (event.key.keysym.sym == SDLK_ESCAPE) dc_cheats_menu_toggle();
+                }
+                break;
+            }
             MapleController *ctrl = dc_maple_get_controller(hw, 0);
             if (!ctrl) break;
-            bool pressed = (event.type == SDL_KEYDOWN);
             uint32_t bit = 0;
 
             switch (event.key.keysym.sym) {
-            case SDLK_F11:
-                /* Active ou coupe les codes de triche charges. */
-                if (pressed && !event.key.repeat) dc_cheats_toggle();
-                break;
-
             case SDLK_F12:
                 /* F12 toggles fullscreen. Shift+F12 keeps the diagnostic capture. */
                 if (pressed && !event.key.repeat && (event.key.keysym.mod & KMOD_SHIFT)) {
@@ -832,7 +865,7 @@ void platform_swap_buffers(void) {
     /* A test may capture the composed frame; normal games do not create files. */
     { static int checked; static const char *shot;
       if (!checked) { shot = getenv("DCRECOMP_TEST_OSD_SCREENSHOT"); checked = 1; }
-      if (shot && dc_cinematic_message()) { pvr2_screenshot(shot); shot = NULL; } }
+      if (shot && (dc_cinematic_message() || dc_cheats_menu_is_open())) { pvr2_screenshot(shot); shot = NULL; } }
     SDL_GL_SwapWindow(g_window);
     /* Optional stress test for occasional long rendering stalls. */
     static int stall=-1; static unsigned swaps;

@@ -111,6 +111,63 @@ def learning_rounds() -> int:
     return max(1, wanted)
 
 
+def moteur_empreinte() -> str:
+    """Empreinte du moteur Dreamcast et du traducteur. Un jeu construit avec une
+    autre empreinte n'a pas les dernières corrections du compilateur : il est
+    remis à jour par une version d'essai (phantom_dc_autolearn.prepare)."""
+    h = hashlib.sha256()
+    fichiers = sorted(p for racine in (LAB / 'dcrecomp/src', LAB / 'dcrecomp/include', PROTOTYPE)
+                      for p in racine.rglob('*')
+                      if p.is_file() and (p.suffix in ('.c', '.h') or p.name == 'CMakeLists.txt'))
+    fichiers += [LAB / 'dcrecomp/tools/static_recompile.py', LAB / 'apprentissage.py',
+                 LAB / 'sofdec_cinema.py', LAB / 'grandia_cinema.py']
+    for p in fichiers:
+        h.update(p.relative_to(LAB).as_posix().encode('utf-8') + b'\0')
+        h.update(p.read_bytes().replace(b'\r\n', b'\n'))
+    return h.hexdigest()
+
+
+def reprendre_apprentissage_des_jeux(learned, boot_sha1: str, log=print) -> int:
+    """Reprend l'apprentissage rangé dans les jeux déjà compilés de ce disque
+    (bibliothèque PhantomStation). Il voyage ainsi avec les jeux : sur un
+    nouveau PC, une recompilation repart de ce qui avait été appris."""
+    try:
+        sys.path.insert(0, str(ROOT))
+        from bibliotheque import registered_games
+        import apprentissage as learn
+        jeux = list(registered_games())
+    except Exception:
+        return 0
+    total = 0
+    for chemin in jeux:
+        try: total += learn.fusionner_paquet(learned, Path(chemin), boot_sha1)
+        except Exception: continue
+    if total:
+        log(f'{total} entrée(s) apprise(s) reprise(s) depuis les jeux déjà compilés de ce disque.')
+    return total
+
+
+def archive_siblings(learned, image: Path, log=print) -> int:
+    """Ajoute à learned ce que le disque permet de trouver sans jouer :
+    les programmes rangés dans la même archive AFS qu'un programme déjà appris
+    (apprentissage.programmes_voisins), puis les fonctions qu'un programme
+    désigne dans un autre (apprentissage.pointeurs_entre_programmes). Un
+    disque illisible ici n'empêche jamais la compilation."""
+    added=0
+    try:
+        with DreamcastChd(Path(image),LibChdr(LIBCHDR.resolve(strict=True))) as disc:
+            added=learned.add_archive_siblings(disc)
+    except (ChdError,OSError,ValueError) as exc:
+        log('Archives du disque non examinées : '+str(exc))
+    if added:
+        log(f'{added} programme(s) rangé(s) sur le disque avec un programme déjà appris '
+            '(boss, niveaux…) : traduits aussi.')
+    cross=learned.add_cross_pointers()
+    if cross:
+        log(f'{cross} fonction(s) appelée(s) d’un programme à l’autre (du boss vers le jeu…) : traduites aussi.')
+    return added+cross
+
+
 def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: Path, env: dict, log) -> Path:
     """Build a disc with no hand-written profile, learning what it loads."""
     import apprentissage as learn
@@ -120,6 +177,8 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
     learned=learn.Learned(learn.cache_root(info['boot_sha1']))
     played=learned.merge_sessions(0x8c010000+len(boot))
     if played: log(f'{played} point(s) d’entrée découvert(s) pendant tes parties.')
+    repris=reprendre_apprentissage_des_jeux(learned,info['boot_sha1'],log)
+    if archive_siblings(learned,image,log) or repris: learned.save()
     if learned.blocks or learned.main:
         log(f'Reprise de ce qui a été appris sur ce disque : {len(learned.blocks)} bloc(s) de code, '
             f'{len(learned.main)} entrée(s) du programme principal.')
@@ -136,8 +195,9 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
                             +' '.join(options).encode()).hexdigest()
     rounds=learning_rounds()
     for attempt in range(rounds+1):
+        import sofdec_cinema
         entries=sorted(learned.main|({irq} if irq else set())|learn.block_pointers(learned.blocks,boot)
-                       |learn.code_constants(boot))
+                       |learn.code_constants(boot)|sofdec_cinema.entrees(boot))
         entries_text=''.join(f'0x{e:08X}\n' for e in entries)
         main_dir=main_cache/hashlib.sha1((translator+entries_text).encode()).hexdigest()[:12]
         if not main_dir.exists():
@@ -160,6 +220,8 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
             import grandia_cinema
             if grandia_cinema.apply(stage, info['boot_sha1']):
                 log('Grandia II : passage des vidéos avec Start activé.')
+        # Tout jeu qui utilise Sofdec : Start passe les films.
+        sofdec_cinema.apply(stage,boot,log)
         # 1 TA buffer, 4 threads, 8 accurate P4, 16 interrupts through the
         # game's own vector (what it hangs off it only runs that way).
         learn.write_learned_table(stage,table); learn.patch_dispatch(stage); learn.write_profile(stage,irq,29)
@@ -183,6 +245,7 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
         run_dir=work/f'essai-{attempt+1}'
         learn.learning_run(exe,boot_path,image,run_dir)
         new=learned.merge_run(run_dir,boot_end)
+        if new: new+=archive_siblings(learned,image,log)
         learned.save()
         if not new:
             log('Aucun nouveau code découvert : apprentissage terminé.'); break
@@ -228,6 +291,8 @@ def wire_learned(learned, work, game, env, boot, log):
         import grandia_cinema
         if grandia_cinema.apply(game, GRANDIA_BOOT_SHA1):
             log('Grandia II : passage des vidéos avec Start activé.')
+    import sofdec_cinema
+    sofdec_cinema.apply(game, boot, log)
     learn.write_learned_table(game, table)
     learn.patch_dispatch(game)
     learn.dynamic_stubs(game)
@@ -380,6 +445,7 @@ def build(image: Path, destination: Path, log=print) -> Path:
             run_command([output/'Crazy Taxi - prototype.exe',test],env=env,timeout=30)
         (output/'prototype.json').write_text(json.dumps({'console':'Dreamcast','titre':info['title'],
             'sha1_demarrage':info['boot_sha1'],'disque_original':str(image),'profil':profile,
+            'moteur':moteur_empreinte(),
             'statut':'prototype local : visuels, son, sauvegardes et intégration restent expérimentaux'},
             ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
         try: output.rename(destination)

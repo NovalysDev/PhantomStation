@@ -461,6 +461,8 @@ static void run_dma(DCHardware *hw, uint32_t base, int istnrm_bit,
             }
             if (dir) memcpy(rootp, devp, copy);
             else     memcpy(devp, rootp, copy);
+            if (!dir && dc_aica_surveille_actif && !strcmp(dw, "AICA"))
+                dc_aica_surveille("G2-DMA", (device & 0x1FFFFFFFu) - 0x00800000u, copy, 0);
             if (log) {
                 dma_log++;
                 printf("[%s-DMA] %u bytes %s 0x%08X(%s) %s 0x%08X(%s)\n",
@@ -1336,6 +1338,24 @@ void dc_aica_reg_write(uint32_t off, uint32_t val) {
         arm7_set_reset(&g_arm7, false);
         printf("[AICA] sound processor released - running its driver\n");
         sh4_aica_arm_released();
+        /* Une avance au départ : le pilote commence par effacer sa zone de
+         * travail. Le SH-4 compilé va bien plus vite que sur la console entre
+         * le lancement du pilote et ses premiers envois, alors que le pilote
+         * avance au rythme de l'horloge réelle : Grandia II écrivait parfois
+         * sa table de banques de sons (0x14080) avant cet effacement, qui la
+         * remettait à zéro. Sans banques, chaque bruitage retombait sur le bip
+         * de secours du pilote (0x3FAC, 0x4070) : le « bourdon » et le son de
+         * sélection faux. 65536 instructions = environ 23 ms de la console ;
+         * l'effacement de Grandia est fini après 16000.
+         * PHANTOM_DC_ARM7_DEPART règle l'avance (0 = aucune). */
+        { static long depart = -1;
+          if (depart < 0) { const char *e = getenv("PHANTOM_DC_ARM7_DEPART");
+                            depart = e ? atol(e) : 65536; if (depart < 0) depart = 0; }
+          if (depart > 0) {
+              g_in_arm7 = 1;
+              arm7_run(&g_arm7, (int)depart);
+              g_in_arm7 = 0;
+          } }
     } else if (off == AICA_ARM_RESET_OFF && (val & 1)) {
         arm7_set_reset(&g_arm7, true);
     } else if (off == AICA_SCIRE) {
@@ -1993,6 +2013,22 @@ int dc_gdrom_read_sectors(DCHardware *hw, uint32_t lba, uint32_t count, void *bu
 
 /* For the heartbeat: how much work the sound processor has done. */
 uint64_t dc_aica_arm_instructions(void) { return arm7_instruction_count(&g_arm7); }
+
+int dc_aica_surveille_actif = -1;
+void dc_aica_surveille(const char *qui, uint32_t off, uint32_t len, uint32_t val) {
+    static long cible = -1; static unsigned n;
+    if (dc_aica_surveille_actif < 0) {
+        const char *e = getenv("PHANTOM_DC_AICA_WATCH");
+        cible = e && *e ? strtol(e, NULL, 0) : -1;
+        dc_aica_surveille_actif = cible >= 0;
+    }
+    if (!dc_aica_surveille_actif || n >= 600) return;
+    off &= 0x1FFFFFu;
+    if (off + len <= (uint32_t)cible || off >= (uint32_t)cible + 32u) return;
+    n++;
+    printf("[AICA-WATCH] %s off=%06X len=%u val=%08X t=%llums arm=%llu\n", qui, off, len, val,
+           (unsigned long long)platform_get_ticks_ms(), (unsigned long long)dc_aica_arm_instructions());
+}
 
 /* One-shot: what is the sound processor doing right now? */
 void dc_aica_arm_state(void) {

@@ -83,8 +83,23 @@ static volatile unsigned g_images;
 static DWORD WINAPI veille_gels(void *param) {
     (void)param;
     int gele = 0, rien_signale = 0; uint64_t debut_gel = 0, lancement = platform_get_ticks_us();
+    /* Atelier : PHANTOM_DC_RAM_A=millisecondes:fichier garde la mémoire du jeu à
+     * cet instant, même si l'image continue (écran noir qui tourne en boucle). */
+    const char *ram_a = getenv("PHANTOM_DC_RAM_A");
+    uint64_t ram_a_us = ram_a ? strtoull(ram_a, NULL, 10) * 1000ull : 0;
+    const char *ram_a_fichier = ram_a ? strchr(ram_a, ':') : NULL;
     for (;;) {
         Sleep(500);
+        if (ram_a_fichier && platform_get_ticks_us() - lancement >= ram_a_us) {
+            const SH4CPU *c = g_cpu_surveille;
+            if (c && c->ram) {
+                FILE *f = fopen(ram_a_fichier + 1, "wb");
+                if (f) { fwrite(c->ram, 1, 16u << 20, f); fclose(f); }
+                fprintf(stderr, "[RAM] memoire du jeu enregistree a %llu ms (pc=%08X)\n",
+                        (unsigned long long)(ram_a_us / 1000ull), c->pc);
+            }
+            ram_a_fichier = NULL;
+        }
         if (!g_images) {
             /* Aucune image depuis le lancement : bloqué avant même le premier écran. */
             uint64_t now = platform_get_ticks_us();

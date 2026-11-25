@@ -17,7 +17,7 @@ def game_save_files(info, selected=None):
     console = info.get('platform')
     files = []
     folder = (Path(selected['PHANTOM_SELECTED_PROFILE_DIR']) if selected.get('PHANTOM_SELECTED_PROFILE_DIR') else
-              save_directory(info))
+              Path(selected['PHANTOM_DEBUG_SAVE_DIR']) if selected.get('PHANTOM_DEBUG_SAVE_DIR') else save_directory(info))
     # A selected Dreamcast card replaces the game's default VMU.
     if not (console == 'DC' and selected.get('PHANTOM_SELECTED_DC_CARD')):
         for item in _save_files(folder):

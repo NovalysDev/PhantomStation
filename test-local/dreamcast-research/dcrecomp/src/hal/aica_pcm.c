@@ -116,8 +116,11 @@ static void tables(void) {
     tables_pretes = 1;
 }
 
+static void dsp_reset(void);
+
 void aica_pcm_reset(void) {
     tables();
+    dsp_reset();
     memset(voies, 0, sizeof voies);
     memset(&g_diag, 0, sizeof g_diag);
     g_diag_total_frames = 0;
@@ -189,8 +192,55 @@ static int pcm(const uint8_t *ram, Voie *c, const Flux *f, uint32_t i) {
     return (int16_t)(c->bruit >> 16);
 }
 
+/* Atelier : PHANTOM_DC_ADPCM_TRACE=dossier. À la première saturation du
+ * décodeur ADPCM d'une voix depuis son départ, note la voix et son état, et
+ * copie l'échantillon tel qu'il est en mémoire son (adpcm-<sa>-<n>.bin), pour
+ * le redécoder à part : saturé dès un décodage propre, c'est la donnée du jeu ;
+ * propre, c'est notre lecture (boucle, flux rechargé, état du décodeur). */
+static unsigned char g_rail_note[CHANNELS];
+static int64_t g_trace_mix;              /* PHANTOM_DC_MIX_TRACE (seuil), 0 = éteint */
+static int64_t g_part[CHANNELS][3];      /* part de chaque voix : directe G, D, envoi DSP */
+static const uint32_t *g_regs_vus;      /* registres de la puce, pour la copie (aica-regs-<n>.bin) */
+static void trace_rail(const uint8_t *ram, const Voie *c, const Flux *f) {
+    static const char *dossier = (const char *)-1;
+    static unsigned copies;
+    if (dossier == (const char *)-1) dossier = getenv("PHANTOM_DC_ADPCM_TRACE");
+    if (!dossier || !*dossier) return;
+    int ch = (int)(c - voies);
+    if (ch < 0 || ch >= CHANNELS || g_rail_note[ch]) return;
+    g_rail_note[ch] = 1;
+    printf("[ADPCM-RAIL] ch=%d fmt=%u lp=%u sa=%06X lsa=%04X lea=%04X ca=%04X joues=%u boucle=%d fin=%d "
+           "quant=%d s0=%d loop_quant=%d loop_s0=%d\n",
+           ch, f->fmt, f->lpctl, f->sa, f->lsa, f->lea, c->ca, c->joues, c->in_loop, c->looped,
+           c->quant, c->s0, c->loop_quant, c->loop_s0);
+    if (g_regs_vus) {
+        const uint32_t *v = g_regs_vus + ch * 32;
+        printf("[ADPCM-RAIL]   regs ch=%d isel_imxl=%04X disdl_pan=%04X tl_lpoff_q=%04X flv=%04X,%04X,%04X,%04X,%04X far_fd1r=%04X fd2r_frr=%04X\n",
+               ch, v[8] & 0xffffu, v[9] & 0xffffu, v[10] & 0xffffu, v[11] & 0xffffu, v[12] & 0xffffu,
+               v[13] & 0xffffu, v[14] & 0xffffu, v[15] & 0xffffu, v[16] & 0xffffu, v[17] & 0xffffu);
+    }
+    if (copies >= 200) return;
+    if (g_regs_vus && (copies == 0 || copies == 100)) {
+        char nom[1024];
+        snprintf(nom, sizeof nom, "%s/aica-regs-%u.bin", dossier, copies);
+        FILE *r = fopen(nom, "wb");
+        if (r) { fwrite(g_regs_vus, 4, 0x8000 / 4, r); fclose(r); }
+    }
+    uint32_t fin = f->lea > f->lsa ? f->lea : f->lsa;
+    if (c->ca > fin) fin = c->ca;
+    uint32_t octets = fin / 2 + 2;
+    if (octets > 0x40000) octets = 0x40000;
+    char chemin[1024];
+    snprintf(chemin, sizeof chemin, "%s/adpcm-%06X-%u.bin", dossier, f->sa, copies++);
+    FILE *out = fopen(chemin, "wb");
+    if (!out) return;
+    for (uint32_t i = 0; i < octets; ++i) fputc(ram[(f->sa + i) & RAM_MASK], out);
+    fclose(out);
+}
+
 /* Décode l'échantillon à la position ca (et, si dernier, le suivant). */
 static void decode(const uint8_t *ram, Voie *c, const Flux *f, int dernier) {
+    uint64_t rails_avant = g_diag.adpcm_rail;
     uint32_t suivant = c->ca + 1;
     /* Hors boucle, la puce joue jusqu'a LEA et s'arrete. Revenir a LSA pour
      * l'echantillon suivant faisait sauter la fin des effets courts au debut
@@ -198,7 +248,8 @@ static void decode(const uint8_t *ram, Voie *c, const Flux *f, int dernier) {
      * derniere valeur, seule la boucle demandee ramene a LSA. */
     /* Comme la puce : on ne revient a LSA que si LEA est bien apres LSA.
      * Quand LSA > LEA, l'echantillon continue au-dela de LEA. */
-    if (suivant >= f->lea && f->lea > f->lsa) suivant = f->lsa;
+    if (suivant >= f->lea && f->lea > f->lsa)
+        suivant = f->lpctl ? f->lsa : c->ca;
     if (f->fmt < 2 || f->fmt == 4) {
         if (!dernier) return;
         c->s0 = pcm(ram, c, f, c->ca);
@@ -215,8 +266,9 @@ static void decode(const uint8_t *ram, Voie *c, const Flux *f, int dernier) {
     if (dernier) {
         int prev = c->s0;
         if (f->fmt == 2 && suivant == f->lsa && c->in_loop) { q = c->loop_quant; prev = c->loop_s0; }
-        c->s1 = adpcm((unsigned)nibble(ram, f->sa, suivant), prev, &q);
+        c->s1 = !f->lpctl && suivant == c->ca ? c->s0 : adpcm((unsigned)nibble(ram, f->sa, suivant), prev, &q);
     } else c->s1 = 0;
+    if (g_diag.adpcm_rail != rails_avant) trace_rail(ram, c, f);
 }
 
 static void eteindre(Voie *c, uint32_t *v) {
@@ -253,6 +305,7 @@ static unsigned vitesse_effective(unsigned vitesse, const uint32_t *v) {
 
 static void key_on(Voie *c, const uint32_t *v, const uint8_t *ram) {
     memset(c, 0, sizeof *c);
+    g_rail_note[c - voies] = 0;
     c->active = 1; c->etat = ATTAQUE; c->eg = 0x280 << EG_BITS;
     c->quant = 127;
     lfo_reset(c, v);
@@ -391,12 +444,171 @@ static int16_t limite(int64_t v) {
     return (int16_t)v;
 }
 
+/* ---- Processeur d'effets (DSP) de la puce son ----------------------------
+ *
+ * Un jeu y charge un programme de 128 pas (MPRO, en 0x3400) avec ses
+ * coefficients (COEF, 0x3000) et ses adresses de retard (MADRS, 0x3200), qui
+ * vivent dans un anneau en mémoire son (RBP/RBL, 0x2804). Les voix y envoient
+ * leur son sur 16 bus (ISEL, au niveau IMXL) ; le programme en fait de l'écho,
+ * de la réverbération, ou le laisse passer, et ses 16 sorties (EFREG) vont aux
+ * haut-parleurs chacune à son niveau (EFSDL) et à sa place gauche-droite
+ * (EFPAN, 0x2000).
+ *
+ * Sans lui, un son qui ne passait que par le DSP était rendu au centre, sec,
+ * au niveau d'envoi : Grandia II envoie tous ses bruitages et ses cris ainsi,
+ * sur des bus que son programme place à gauche, à droite ou en phase inversée,
+ * avec réverbération. Tout empilé au centre et sec, les sons forts sortaient
+ * durs (« ça sature quand Ryudo crie »).
+ *
+ * Calcul pas à pas sur l'interpréteur de Flycast (GPL-2.0),
+ * core/hw/aica/dsp_interp.cpp et dsp.cpp ; envoi des voix et sorties d'après
+ * sgc_if.cpp. PHANTOM_DC_DSP=0 revient au rendu au centre. Un jeu qui ne
+ * charge pas de programme garde ce rendu-là. */
+#define DSP_COEF  (0x3000 / 4)
+#define DSP_MADRS (0x3200 / 4)
+#define DSP_MPRO  (0x3400 / 4)
+#define DSP_SORTIES (0x2000 / 4)
+#define DSP_ANNEAU (0x2804 / 4)
+
+static struct {
+    int32_t temp[128], mems[32], mixs[16];
+    int16_t efreg[16];
+    uint32_t mdec_ct;
+} g_dsp = { .mdec_ct = 1 };
+
+static void dsp_reset(void) { memset(&g_dsp, 0, sizeof g_dsp); g_dsp.mdec_ct = 1; }
+
+static int dsp_voulu(void) {
+    static int voulu = -1;
+    if (voulu < 0) { const char *e = getenv("PHANTOM_DC_DSP"); voulu = !(e && *e == '0'); }
+    return voulu;
+}
+
+static int dsp_programme_charge(const uint32_t *r) {
+    for (int i = 0; i < 128 * 4; ++i)
+        if (r[DSP_MPRO + i] & 0xffffu) return 1;
+    return 0;
+}
+
+/* Format 16 bits de l'anneau : signe, exposant sur 4 bits, mantisse sur 11. */
+static uint16_t dsp_pack(int32_t val) {
+    int signe = (val >> 23) & 1;
+    uint32_t t = (uint32_t)(val ^ (val << 1)) & 0xFFFFFFu;
+    int exposant = 0;
+    for (int k = 0; k < 12; ++k) {
+        if (t & 0x800000u) break;
+        t <<= 1;
+        exposant++;
+    }
+    val = (int32_t)((uint32_t)val << (exposant < 12 ? exposant : 11));
+    val = (val >> 11) & 0x7FF;
+    val |= signe << 15;
+    val |= exposant << 11;
+    return (uint16_t)val;
+}
+
+static int32_t dsp_unpack(uint16_t val) {
+    int signe = (val >> 15) & 1, exposant = (val >> 11) & 0xF;
+    int32_t u = (int32_t)(val & 0x7FF) << 11;
+    u |= signe << 22;
+    if (exposant > 11) exposant = 11;
+    else u ^= 1 << 22;
+    u |= signe << 23;
+    u = (int32_t)((uint32_t)u << 8) >> 8;
+    return u >> exposant;
+}
+
+/* Un pas d'échantillon : les 128 instructions, puis l'anneau avance. */
+static void dsp_pas(const uint32_t *r, uint8_t *ram) {
+    uint32_t anneau = r[DSP_ANNEAU];
+    uint32_t rbl = (8192u << ((anneau >> 13) & 3u)) - 1u;
+    uint32_t rbp = ((anneau & 0xFFFu) * 2048u) & RAM_MASK;
+    int32_t acc = 0, shifted = 0, x = 0, y = 0, b = 0, inputs = 0;
+    int32_t memval[4] = { 0, 0, 0, 0 }, frc = 0, yreg = 0;
+    uint32_t adrs = 0;
+    for (int step = 0; step < 128; ++step) {
+        const uint32_t *ip = r + DSP_MPRO + step * 4;
+        uint32_t i0 = ip[0] & 0xFFFFu, i1 = ip[1] & 0xFFFFu, i2 = ip[2] & 0xFFFFu, i3 = ip[3] & 0xFFFFu;
+        if (!(i0 | i1 | i2 | i3)) {
+            /* Instruction vide : X = B = TEMP, Y = FRC, rien n'est écrit. */
+            x = g_dsp.temp[g_dsp.mdec_ct & 0x7F];
+            acc = (int32_t)(((int64_t)x * frc) >> 12) + x;
+            continue;
+        }
+        uint32_t tra = (i0 >> 9) & 0x7F, ira = (i1 >> 7) & 0x3F, ysel = (i1 >> 13) & 3u;
+        uint32_t shift = (i2 >> 4) & 3u;
+
+        if (ira <= 0x1F) inputs = g_dsp.mems[ira];
+        else if (ira <= 0x2F) inputs = g_dsp.mixs[ira - 0x20] * 16;   /* MIXS : 20 bits */
+        else inputs = 0;                                              /* EXTS (CD audio) : absent */
+
+        if (i1 & 0x40) g_dsp.mems[(i1 >> 1) & 0x1F] = memval[step & 3];   /* IWT */
+
+        if (i2 & 2) b = 0;                                            /* ZERO */
+        else {
+            b = (i2 & 1) ? acc : g_dsp.temp[(tra + g_dsp.mdec_ct) & 0x7F];   /* BSEL */
+            if (i2 & 4) b = -b;                                       /* NEGB */
+        }
+        x = (i1 & 0x8000) ? inputs : g_dsp.temp[(tra + g_dsp.mdec_ct) & 0x7F];   /* XSEL */
+        if (ysel == 0) y = frc;
+        else if (ysel == 1) y = ((int32_t)(int16_t)(r[DSP_COEF + step] & 0xFFFFu)) >> 3;
+        else if (ysel == 2) y = yreg >> 11;
+        else y = (yreg >> 4) & 0x0FFF;
+        if (i2 & 8) yreg = inputs;                                    /* YRL */
+
+        /* La sortie de l'additionneur a un pas de retard : SHIFTED vient de
+         * l'ACC du pas précédent. */
+        shifted = (shift == 0 || shift == 3) ? acc : (int32_t)((uint32_t)acc << 1);
+        if (shift < 2) shifted = shifted < -0x800000 ? -0x800000 : shifted > 0x7FFFFF ? 0x7FFFFF : shifted;
+
+        acc = (int32_t)(((int64_t)x * y) >> 12) + b;
+
+        if (i0 & 0x100) g_dsp.temp[(((i0 >> 1) & 0x7F) + g_dsp.mdec_ct) & 0x7F] = shifted;   /* TWT */
+        if (i2 & 0x40) frc = shift == 3 ? (shifted & 0x0FFF) : (shifted >> 11);            /* FRCL */
+
+        /* Mémoire (anneau en mémoire son) : seulement aux pas impairs. */
+        if ((step & 1) && (i2 & 0x6000)) {
+            uint32_t addr = r[DSP_MADRS + ((i3 >> 9) & 0x3F)] & 0xFFFFu;
+            if (i3 & 0x100) addr += adrs & 0x0FFF;                    /* ADREB */
+            if (i3 & 0x80) addr++;                                    /* NXADR */
+            if (!(i2 & 0x8000)) { addr += g_dsp.mdec_ct; addr &= rbl; }   /* TABLE = 0 */
+            else addr &= 0xFFFF;
+            addr = (rbp + (addr << 1)) & RAM_MASK & ~1u;
+            if (i2 & 0x2000)                                          /* MRD */
+                memval[(step + 2) & 3] = dsp_unpack((uint16_t)(ram[addr] | (ram[addr + 1] << 8)));
+            if (i2 & 0x4000) {                                        /* MWT */
+                uint16_t p = dsp_pack(shifted);
+                ram[addr] = (uint8_t)p; ram[addr + 1] = (uint8_t)(p >> 8);
+            }
+        }
+        if (i2 & 0x80) adrs = shift == 3 ? (uint32_t)(shifted >> 12) : (uint32_t)(inputs >> 16);   /* ADRL */
+        if (i2 & 0x1000) g_dsp.efreg[(i2 >> 8) & 0x0F] = (int16_t)(shifted >> 8);                 /* EWT */
+    }
+    if (--g_dsp.mdec_ct == 0) g_dsp.mdec_ct = rbl + 1;
+}
+
 void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) {
     if (!r || !ram || !out) return;
     tables();
     g_ram = ram;
+    g_regs_vus = r;
+    { static int lu; if (!lu) { lu = 1; const char *e = getenv("PHANTOM_DC_MIX_TRACE"); g_trace_mix = e ? atoll(e) : 0; } }
+    /* La mémoire son est celle de la puce : le DSP y écrit son anneau. */
+    uint8_t *ram_dsp = (uint8_t *)ram;
+    int dsp = dsp_voulu() && dsp_programme_charge(r);
+    /* Atelier : PHANTOM_DC_DSP_REGS=dossier copie les registres de la puce
+     * toutes les 10 s (regs-<n>.bin), DSP actif ou non. */
+    { static const char *d = (const char *)-1; static uint64_t vus; static unsigned copie;
+      if (d == (const char *)-1) d = getenv("PHANTOM_DC_DSP_REGS");
+      if (d && *d && (vus += frames) >= 441000u) {
+          char nom[1024]; snprintf(nom, sizeof nom, "%s/regs-%03u.bin", d, copie++);
+          FILE *fr = fopen(nom, "wb"); if (fr) { fwrite(r, 4, 0x8000 / 4, fr); fclose(fr); }
+          vus = 0;
+      } }
     for (size_t i = 0; i < frames; ++i) {
         int64_t left = 0, right = 0;
+        if (dsp) memset(g_dsp.mixs, 0, sizeof g_dsp.mixs);
+        if (g_trace_mix) memset(g_part, 0, sizeof g_part);
         for (int ch = 0; ch < CHANNELS; ++ch) {
             Voie *c = &voies[ch]; if (!c->active) continue;
             uint32_t *v = r + ch * 32;
@@ -437,25 +649,37 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
             unsigned tl = voff ? 0 : (v[10] >> 8) & 255u;
             unsigned disdl = (v[9] >> 8) & 15u, dipan = v[9] & 31u;
             unsigned max_att = 255 - ofsatt;
+            unsigned imxl = (v[8] >> 4) & 15u;
             if (mute_alarm_voice) {
                 /* Silence the output only: envelopes, playback position and
                  * key-off must keep running so the driver can reuse the voice. */
-            } else if (disdl) {
-                unsigned full = tl + send_level[disdl], pan = full + send_level[(~dipan) & 15u];
-                unsigned dl = (dipan & 0x10) ? full : pan, dr = (dipan & 0x10) ? pan : full;
-                if (dl > max_att) dl = max_att;
-                if (dr > max_att) dr = max_att;
-                left += ((int64_t)sample * tl_lut[ofsatt + dl]) >> 15;
-                right += ((int64_t)sample * tl_lut[ofsatt + dr]) >> 15;
             } else {
-                /* Pas de sortie directe : le son part seulement vers le DSP
-                 * (effets), que nous n'avons pas. On le rend au centre, à son
-                 * niveau d'envoi, plutôt que de le perdre. */
-                unsigned ds = tl + send_level[(v[8] >> 4) & 15u];
-                if ((v[8] >> 4) & 15u) ++g_diag.dsp_only;
-                if (ds > max_att) ds = max_att;
-                int64_t s = ((int64_t)sample * tl_lut[ofsatt + ds]) >> 15;
-                left += s; right += s;
+                if (disdl) {
+                    unsigned full = tl + send_level[disdl], pan = full + send_level[(~dipan) & 15u];
+                    unsigned dl = (dipan & 0x10) ? full : pan, dr = (dipan & 0x10) ? pan : full;
+                    if (dl > max_att) dl = max_att;
+                    if (dr > max_att) dr = max_att;
+                    left += ((int64_t)sample * tl_lut[ofsatt + dl]) >> 15;
+                    right += ((int64_t)sample * tl_lut[ofsatt + dr]) >> 15;
+                    if (g_trace_mix) { g_part[ch][0] = ((int64_t)sample * tl_lut[ofsatt + dl]) >> 15;
+                                       g_part[ch][1] = ((int64_t)sample * tl_lut[ofsatt + dr]) >> 15; }
+                }
+                if (imxl) {
+                    unsigned ds = tl + send_level[imxl];
+                    if (!disdl) ++g_diag.dsp_only;
+                    if (ds > max_att) ds = max_att;
+                    if (dsp) {
+                        /* Envoi au bus ISEL du DSP, sur 20 bits. */
+                        g_dsp.mixs[v[8] & 15u] += (int32_t)(((int64_t)sample * 16 * tl_lut[ofsatt + ds]) >> 15);
+                        if (g_trace_mix) g_part[ch][2] = ((int64_t)sample * tl_lut[ofsatt + ds]) >> 15;
+                    } else if (!disdl) {
+                        /* Sans programme DSP : le son qui n'allait qu'au DSP
+                         * est rendu au centre, à son niveau d'envoi, plutôt
+                         * que perdu. */
+                        int64_t s = ((int64_t)sample * tl_lut[ofsatt + ds]) >> 15;
+                        left += s; right += s;
+                    }
+                }
             }
 
             enveloppe(c, v);
@@ -516,6 +740,76 @@ void aica_pcm_mix(uint32_t *r, const uint8_t *ram, int16_t *out, size_t frames) 
 
             /* LFO : un pas tous les « période » échantillons. */
             if (--c->lfo_compte == 0) { c->lfo_pas++; c->lfo_compte = lfo_periode(v); }
+        }
+        if (dsp) {
+            dsp_pas(r, ram_dsp);
+            /* Les 16 sorties du DSP, chacune à son niveau (EFSDL) et à sa
+             * place (EFPAN : bit 4 = côté plein, bits 0-3 = atténuation de
+             * l'autre côté, 3 dB par pas). */
+            /* Atelier : PHANTOM_DC_DSP_TRACE=1 note toutes les 10 s le pic de
+             * chaque sortie et de chaque bus d'entrée. */
+            { static int trace = -1; static int32_t pic_e[16], pic_m[16]; static unsigned n;
+              if (trace < 0) trace = getenv("PHANTOM_DC_DSP_TRACE") != NULL;
+              if (trace) {
+                  for (int e = 0; e < 16; ++e) {
+                      int32_t a = g_dsp.efreg[e] < 0 ? -g_dsp.efreg[e] : g_dsp.efreg[e];
+                      int32_t m = g_dsp.mixs[e] < 0 ? -g_dsp.mixs[e] : g_dsp.mixs[e];
+                      if (a > pic_e[e]) pic_e[e] = a;
+                      if (m > pic_m[e]) pic_m[e] = m;
+                  }
+                  if (++n >= 441000u) {
+                      printf("[DSP] sorties :");
+                      for (int e = 0; e < 16; ++e) printf(" %d", pic_e[e]);
+                      printf(" | bus (20 bits) :");
+                      for (int e = 0; e < 16; ++e) printf(" %d", pic_m[e]);
+                      printf("\n[DSP] voix envoyees :");
+                      for (int vc = 0; vc < CHANNELS; ++vc) {
+                          if (!voies[vc].active) continue;
+                          const uint32_t *vr = r + vc * 32;
+                          if (!((vr[8] >> 4) & 15u)) continue;
+                          printf(" ch%d(bus%u imxl%u disdl%u pan%02X tl%u fmt%u)", vc, vr[8] & 15u, (vr[8] >> 4) & 15u,
+                                 (vr[9] >> 8) & 15u, vr[9] & 31u, (vr[10] >> 8) & 255u, (vr[0] >> 7) & 3u);
+                      }
+                      printf("\n");
+                      memset(pic_e, 0, sizeof pic_e); memset(pic_m, 0, sizeof pic_m); n = 0;
+                  }
+              } }
+            for (int e = 0; e < 16; ++e) {
+                uint32_t sortie = r[DSP_SORTIES + e];
+                unsigned efsdl = (sortie >> 8) & 15u, efpan = sortie & 31u;
+                if (!efsdl || !g_dsp.efreg[e]) continue;
+                int64_t plein = ((int64_t)g_dsp.efreg[e] * volume_lut[efsdl]) >> 15;
+                int64_t cote = (plein * volume_lut[15u - (efpan & 15u)]) >> 15;
+                if (efpan & 0x10) { left += plein; right += cote; }
+                else { left += cote; right += plein; }
+            }
+        }
+        /* Atelier : PHANTOM_DC_MIX_TRACE=seuil. Quand le mélange dépasse le
+         * seuil, détaille ce qui le compose : voix (sortie directe G/D, envoi
+         * DSP) et sorties du DSP. Au plus 60 relevés, 4 par seconde. */
+        if (g_trace_mix) {
+            static unsigned releves; static uint64_t prochain;
+            int64_t la = left < 0 ? -left : left, ra = right < 0 ? -right : right;
+            if ((la > g_trace_mix || ra > g_trace_mix) && releves < 60 && g_diag_total_frames >= prochain) {
+                releves++; prochain = g_diag_total_frames + 11025;
+                printf("[MIX] %.2f s G=%lld D=%lld :", g_diag_total_frames / 44100.0, (long long)left, (long long)right);
+                for (int vc = 0; vc < CHANNELS; ++vc) {
+                    if (!g_part[vc][0] && !g_part[vc][1] && !g_part[vc][2]) continue;
+                    const uint32_t *vr = r + vc * 32;
+                    uint32_t sa = ((vr[0] & 0x7fu) << 16) | (vr[1] & 0xffffu);
+                    printf(" ch%d(sa=%06X bus%u imxl%u disdl%u pan%02X tl%u : G%lld D%lld dsp%lld)", vc, sa, vr[8] & 15u,
+                           (vr[8] >> 4) & 15u, (vr[9] >> 8) & 15u, vr[9] & 31u, (vr[10] >> 8) & 255u,
+                           (long long)g_part[vc][0], (long long)g_part[vc][1], (long long)g_part[vc][2]);
+                }
+                if (dsp) {
+                    printf(" | DSP :");
+                    for (int e = 0; e < 16; ++e) {
+                        uint32_t so = r[DSP_SORTIES + e];
+                        if (((so >> 8) & 15u) && g_dsp.efreg[e]) printf(" E%d=%d(sdl%u pan%02X)", e, g_dsp.efreg[e], (so >> 8) & 15u, so & 31u);
+                    }
+                }
+                printf("\n");
+            }
         }
         if (g_mono) left = right = (left + right) / 2;
         left = (left * volume_lut[g_mvol]) >> 15;

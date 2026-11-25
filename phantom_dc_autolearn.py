@@ -179,7 +179,55 @@ def _rejected(game):
     except (OSError, ValueError, AttributeError): return None
 
 
-def prepare(game, builder=None, smoke=None):
+def _archive_siblings(learned, disc):
+    """Programmes du disque rangés avec un programme déjà appris (archive AFS) :
+    les autres boss ou niveaux chargés à la même adresse. 0 si illisible."""
+    if str(LAB) not in sys.path: sys.path.insert(0, str(LAB))
+    try:
+        import build_pal_prototype
+    except (ImportError, OSError):
+        return 0
+    return build_pal_prototype.archive_siblings(learned, disc, log=lambda _: None)
+
+
+def _moteur_actuel():
+    """Empreinte du moteur que le compilateur construirait aujourd'hui."""
+    if str(LAB) not in sys.path: sys.path.insert(0, str(LAB))
+    try:
+        import build_pal_prototype
+        return build_pal_prototype.moteur_empreinte()
+    except (ImportError, OSError):
+        return None
+
+
+def _moteur_du_jeu(game, cache):
+    """Empreinte du moteur que ce jeu utilise : celui de la correction gardée,
+    sinon celui rangé dans le jeu compilé ; None pour un jeu plus ancien."""
+    try:
+        original, base = _baseline(cache)
+        marque = cache / 'dreamcast-correction.moteur'
+        if base != original and marque.is_file() and not marque.is_symlink():
+            return marque.read_text(encoding='ascii').strip() or None
+    except (OSError, ValueError):
+        pass
+    try:
+        with zipfile.ZipFile(game['path']) as z:
+            return z.read('moteur.txt').decode('ascii').strip() or None
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
+
+
+def _reprendre_apprentissage(learn, game, source, boot_id):
+    """L'apprentissage rangé dans le jeu compilé est remis en place s'il manque
+    sur ce PC (copie du jeu sur un autre PC)."""
+    try:
+        actuel = learn.Learned(source)
+        if learn.fusionner_paquet(actuel, Path(game['path']), boot_id): actuel.save()
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        pass
+
+
+def prepare(game, builder=None, smoke=None, siblings=None):
     """Build an isolated candidate; never replace the player's current engine."""
     cache, state = _paths(game)
     with _lock(game) as acquired:
@@ -197,19 +245,32 @@ def prepare(game, builder=None, smoke=None):
         boot_id = _boot_id(boot)
         source = _local() / 'Dreamcast-apprentissage' / boot_id
         learn = _learn_module()
+        if game.get('path'): _reprendre_apprentissage(learn, game, source, boot_id)
         before, merged = learn.Learned(source), learn.Learned(source)
         for session in sorted(source.glob('partie-*')):
             if session.is_dir() and not session.is_symlink():
                 merged.merge_run(session, 0x8c010000 + boot.stat().st_size)
+        # Un programme appris en jouant (un boss) amène ses voisins de la même
+        # archive du disque : ils sont préparés ensemble, sans attendre de les
+        # avoir tous atteints, une partie à chaque fois.
+        (siblings or _archive_siblings)(merged, disc)
         if bibliotheque.game_running(game):
             _status(game, 'attente', 'Le jeu est ouvert ; réessai à sa fermeture.')
             return False
         entries, fingerprint = _delta(before, merged)
-        if not entries or fingerprint == _rejected(game):
+        # Les corrections du compilateur arrivent aussi dans les jeux déjà
+        # compilés : un moteur plus ancien que celui du compilateur est
+        # reconstruit en version d'essai, même sans rien de nouveau appris.
+        moteur = _moteur_actuel() if game.get('path') else None
+        mise_a_jour = moteur is not None and _moteur_du_jeu(game, cache) != moteur
+        if mise_a_jour:
+            fingerprint = hashlib.sha256((fingerprint + moteur).encode('ascii')).hexdigest()
+        if (not entries and not mise_a_jour) or fingerprint == _rejected(game):
             _status(game, 'aucun', 'Aucune nouvelle fonction à préparer.')
             return False
         original_hash, base_hash = _baseline(cache)
-        _status(game, 'preparation', 'Une version d’essai est en cours de compilation.')
+        _status(game, 'preparation', 'Mise à jour du moteur : une version d’essai est en cours de compilation.'
+                if mise_a_jour and not entries else 'Une version d’essai est en cours de compilation.')
         scratch_parent = _local() / 'Apprentissage-temp'
         scratch_parent.mkdir(parents=True, exist_ok=True)
         if scratch_parent.is_symlink() or getattr(scratch_parent.lstat(), 'st_file_attributes', 0) & 0x400:
@@ -268,7 +329,7 @@ def prepare(game, builder=None, smoke=None):
                     shutil.copy2(item, stage / item.name)
             metadata = {'version': 1, 'id': _identity(game), 'disque': boot_id, 'original': original_hash,
                         'base': base_hash, 'candidat': candidate_hash, 'empreinte': fingerprint,
-                        'profil': _snapshot_digest(stage)}
+                        'profil': _snapshot_digest(stage), 'moteur': moteur or _moteur_actuel() or ''}
             (stage / 'metadata.json').write_text(json.dumps(metadata), encoding='utf-8')
             _check_snapshot(stage)
             with binary.open('rb') as src, pending.open('xb') as dst: shutil.copyfileobj(src, dst, 1024*1024)
@@ -388,6 +449,10 @@ def decide(game, expected_hash, accepted):
                 raise
             finally:
                 backup.unlink(missing_ok=True); pending.unlink(missing_ok=True); pending_marker.unlink(missing_ok=True)
+            # Le moteur gardé est celui du compilateur au moment de l'essai.
+            if re.fullmatch(r'[0-9a-f]{64}', str(data.get('moteur', ''))):
+                try: (cache / 'dreamcast-correction.moteur').write_text(data['moteur'], encoding='ascii')
+                except OSError: pass
             _status(game, 'confirme', 'Version utilisée conservée ; le passage reste à vérifier en jeu.')
         else:
             rejected = _local() / 'Apprentissage-etat' / (_identity(game) + '-refuse.json')

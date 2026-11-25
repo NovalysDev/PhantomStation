@@ -20,7 +20,9 @@
 #define PVR2_LIST_TRANS         2
 #define PVR2_LIST_TRANS_MOD     3
 #define PVR2_LIST_PUNCHTHRU     4
-#define PVR2_NUM_LISTS          5
+#define PVR2_LIST_UI_BG         5  /* 2D panel backing, after 3D before text */
+#define PVR2_LIST_OVERLAY       6  /* screen-space 2D sprites, drawn last */
+#define PVR2_NUM_LISTS          7
 
 /* TA parameter types (bits [31:29] of PCW) */
 #define TA_PARAM_END_OF_LIST    0
@@ -97,6 +99,5 @@ int pvr2_present_framebuffer(uint32_t fb_addr, uint32_t fb_ctrl, int width, int 
 
 /* Resize viewport */
 void pvr2_render_resize(int width, int height);
-void pvr2_osd_frame(void);   /* bandeau a l'ecran (saut de cinematique) */
 
 #endif /* PVR2_H */

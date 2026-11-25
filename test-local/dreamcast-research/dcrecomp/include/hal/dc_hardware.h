@@ -193,6 +193,10 @@ void dc_g2_retire_finished(DCHardware *hw);
 uint32_t dc_aica_reg_read(uint32_t off);
 uint8_t dc_aica_reg_read8(uint32_t off);
 extern int dc_aica_access_width;
+/* Atelier : PHANTOM_DC_AICA_WATCH=adresse en mémoire son. Note qui écrit
+ * (SH-4, ARM7, transfert) dans les 32 octets qui la suivent, et quand. */
+extern int dc_aica_surveille_actif;
+void dc_aica_surveille(const char *qui, uint32_t off, uint32_t len, uint32_t val);
 /* Contenu du registre, sans les effets de bord de la lecture (le bit LP de
  * 0x2810 s'efface quand on le lit) : pour fusionner une écriture de 8 ou 16
  * bits dans son mot. */

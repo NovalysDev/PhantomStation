@@ -36,6 +36,7 @@ class DiagnosticClosureTests(unittest.TestCase):
         view.closed = False; view.close_game = lambda: setattr(view, 'closed', True)
         view.report_hotkey = view.after_id = view.previous_protocol = view.overlay = view.job = view.child = None
         view.windows = []; view.closing = False
+        view.game_bar = view.game_bar_label = None; view.hidden = False
         with patch.object(compiler.simpledialog, 'askstring', return_value='boss invisible'), \
              patch.object(compiler.messagebox, 'askyesnocancel', side_effect=[True, True]), \
              patch.object(compiler.messagebox, 'askyesno', return_value=True):

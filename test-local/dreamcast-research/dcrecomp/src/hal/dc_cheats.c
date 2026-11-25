@@ -346,9 +346,13 @@ const char *dc_cheats_menu_text(void) {
     static char text[1024];
     if (!g_menu) return NULL;
     int count = menu_count();
-    size_t pos = (size_t)snprintf(text, sizeof text, "CODES DE TRICHE - CETTE PARTIE\n");
+    /* Meme langue que PhantomStation (PHANTOM_LANGUAGE), comme dc_cinematic.c. */
+    const char *language = getenv("PHANTOM_LANGUAGE");
+    int en = language && strcmp(language, "en") == 0;
+    size_t pos = (size_t)snprintf(text, sizeof text, en ? "CHEATS - THIS SESSION\n" : "CODES DE TRICHE - CETTE PARTIE\n");
     if (!count) {
-        snprintf(text + pos, sizeof text - pos, "AUCUN CODE COMPATIBLE POUR CE JEU\nF11 POUR FERMER");
+        snprintf(text + pos, sizeof text - pos, en ? "NO COMPATIBLE CHEAT FOR THIS GAME\nF11 TO CLOSE"
+                                                   : "AUCUN CODE COMPATIBLE POUR CE JEU\nF11 POUR FERMER");
         return text;
     }
     int start = (g_selection / 6) * 6;
@@ -359,6 +363,8 @@ const char *dc_cheats_menu_text(void) {
         if (written < 0 || (size_t)written >= sizeof text - pos) break;
         pos += (size_t)written;
     }
-    snprintf(text + pos, sizeof text - pos, "HAUT BAS : CHOISIR  ENTREE/A : ACTIVER\nF11/B : FERMER  %d/%d", g_selection+1, count);
+    snprintf(text + pos, sizeof text - pos, en ? "UP DOWN: CHOOSE  ENTER/A: TOGGLE\nF11/B: CLOSE  %d/%d"
+                                               : "HAUT BAS : CHOISIR  ENTREE/A : ACTIVER\nF11/B : FERMER  %d/%d",
+             g_selection+1, count);
     return text;
 }

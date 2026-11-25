@@ -351,4 +351,56 @@ static inline bool sh4_get_sz(SH4CPU *cpu) { return (cpu->fpscr & FPSCR_SZ) != 0
 static inline bool sh4_get_pr(SH4CPU *cpu) { return (cpu->fpscr & FPSCR_PR) != 0; }
 static inline bool sh4_get_fr(SH4CPU *cpu) { return (cpu->fpscr & FPSCR_FR) != 0; }
 
+/* Double précision (FPSCR.PR = 1).
+ *
+ * Les instructions flottantes ont le même codage dans les deux modes : c'est
+ * FPSCR.PR, au moment où elles s'exécutent, qui dit si FADD additionne deux
+ * FRn ou deux DRn. Un jeu le change lui-même (lds ..., fpscr), si bien que le
+ * traducteur ne peut pas le savoir d'avance : le code traduit regarde le bit.
+ * Traduit toujours en simple, le __udivsi3_i4 de GCC (division entière faite
+ * en double) rendait 0 à Re-Volt : son horloge plafonnait chaque image à 0 et
+ * l'intro restait sur un écran noir.
+ *
+ * DRn est la paire FR(n), moitié haute, et FR(n+1), moitié basse. */
+#define SH4_PR(cpu) __builtin_expect(((cpu)->fpscr & FPSCR_PR) != 0, 0)
+
+static inline double sh4_dr(const SH4CPU *cpu, int n) {
+    uint32_t hi, lo;
+    uint64_t bits;
+    double d;
+    __builtin_memcpy(&hi, &cpu->fr[n & 14], 4);
+    __builtin_memcpy(&lo, &cpu->fr[(n & 14) | 1], 4);
+    bits = ((uint64_t)hi << 32) | lo;
+    __builtin_memcpy(&d, &bits, 8);
+    return d;
+}
+
+static inline void sh4_set_dr(SH4CPU *cpu, int n, double d) {
+    uint64_t bits;
+    uint32_t hi, lo;
+    __builtin_memcpy(&bits, &d, 8);
+    hi = (uint32_t)(bits >> 32);
+    lo = (uint32_t)bits;
+    __builtin_memcpy(&cpu->fr[n & 14], &hi, 4);
+    __builtin_memcpy(&cpu->fr[(n & 14) | 1], &lo, 4);
+}
+
+/* FTRC DRm, FPUL : hors limites, le SH-4 sature au lieu de déborder. */
+static inline uint32_t sh4_ftrc_d(double d) {
+    if (d != d || d <= -2147483649.0) return 0x80000000u;
+    if (d >= 2147483648.0) return 0x7FFFFFFFu;
+    return (uint32_t)(int32_t)d;
+}
+
+/* FTRC FRm, FPUL : de même en simple précision. Une conversion C ordinaire
+ * rend 0x80000000 sur PC pour toute valeur trop grande, même positive. Le
+ * décodeur de voix de Grandia II (0x8C10D660) calcule en 16.16 et garde les
+ * 16 bits du haut : une crête à peine au-dessus de +32767 devenait -32768,
+ * un claquement à chaque son fort (le cri de Ryudo). */
+static inline uint32_t sh4_ftrc_s(float f) {
+    if (f != f || f <= -2147483648.0f) return 0x80000000u;
+    if (f >= 2147483648.0f) return 0x7FFFFFFFu;
+    return (uint32_t)(int32_t)f;
+}
+
 #endif /* SH4_CPU_H */

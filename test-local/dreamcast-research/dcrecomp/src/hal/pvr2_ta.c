@@ -49,7 +49,6 @@ static struct {
     int log_countdown;
 } g_ta;
 
-
 /* ========== Helpers ========== */
 
 static void unpack_color(uint32_t packed, float *r, float *g, float *b, float *a) {
@@ -64,6 +63,10 @@ static float ta_color_unit(float value) {
 
 static void emit_triangle_vertex(const PVR2RenderVertex *v) {
     int list = g_ta.current_list;
+    /* The PowerVR2 renders each list in the order the game submits it; the
+     * panel background, its text and the rotating car overlap in screen space
+     * and are ordered by the game, not by depth. Moving a primitive to another
+     * list (or sorting the translucent list) breaks that order. */
     if (list < 0 || list >= PVR2_NUM_LISTS) return;
 
     PVR2TriList *tl = &g_ta.lists[list];

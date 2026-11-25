@@ -26,6 +26,8 @@ If sending fails, `%LOCALAPPDATA%\PhantomStation\Journaux\envoi-rapport.log` rec
 
 For Dreamcast games opened from the library, the compiler can prepare newly discovered code in the background after a game closes. It checks that a trial engine starts, then uses it on a later launch. After use it is retained automatically, allowing later discoveries to be prepared in turn. The trial does not update a game during a running session; neither starting nor retaining it proves that a boss appears.
 
+The Dreamcast engine now handles double-precision maths and byte-sized switch tables, which fixes the Re-Volt black screen. It also emulates the sound chip's effects processor (echo, reverb) and clips loud peaks as the console does, so Ryudo's scream early in Grandia II no longer crackles. A game created earlier benefits after it is rebuilt.
+
 ## What it does
 
 - Select a console, provide a game image, choose a title and output folder, and start the build.

@@ -227,6 +227,7 @@ static int syscall_romfont(SH4CPU *cpu) {
 #define GDC_CMD_GETTOC2   19
 #define GDC_CMD_INIT      24
 #define GDC_CMD_GETSES    35
+#define GDC_CMD_GETVER    40
 
 #define GDC_SECTOR_SIZE   2048
 #define GDC_RAW_SECTOR    2352
@@ -249,6 +250,12 @@ static uint32_t g_disc_start_lba = 0;   /* first data track, for the TOC */
 static uint32_t g_gdc_next_id = 1;
 static uint32_t g_gdc_last_id = 0;
 static uint32_t g_gdc_reported_id = 0xFFFFFFFFu;
+/* Octets transférés par les dernières commandes, rendus par GetCmdStat dans
+ * sa 3e case comme le BIOS : une bibliothèque de fichiers qui suit la
+ * progression d'une lecture asynchrone par ce compteur attendait sans fin
+ * quand il restait à zéro. */
+#define GDC_SUIVIS 64
+static struct { uint32_t id, octets; } g_gdc_transferts[GDC_SUIVIS];
 /* Used only by the isolated House of the Dead 2 overlay experiment. */
 static int g_test_house_overlay = 0;
 int dc_test_house_overlay(void) { return g_test_house_overlay; }
@@ -369,6 +376,22 @@ static int gdc_exec(SH4CPU *cpu, uint32_t cmd, uint32_t param) {
     }
     case GDC_CMD_INIT:
         return 0;
+    case GDC_CMD_GETVER:
+        /* Version du lecteur, comme le BIOS d'origine : le texte est écrit à
+         * l'adresse que donne le premier mot des paramètres. Laissée sans
+         * réponse, Re-Volt demandait la version puis restait sur un écran noir. */
+        if (param) {
+            static const char version[] = "GDC Version 1.10 1999-03-31";
+            uint32_t dest = sh4_read32(cpu, param);
+            uint32_t phys = dest & 0x1FFFFFFFu;
+            /* Seulement dans la mémoire principale : une adresse inattendue ne
+             * doit jamais écraser autre chose. */
+            if (phys >= 0x0C000000u && phys + 32u <= 0x0D000000u) {
+                for (uint32_t i = 0; i < sizeof version - 1; i++) sh4_write8(cpu, dest + i, (uint8_t)version[i]);
+                sh4_write8(cpu, dest + sizeof version - 1, 0x02);
+            }
+        }
+        return 0;
     case GDC_CMD_GETTOC:
     case GDC_CMD_GETTOC2:
         /* A TOC the game can parse: one data track starting where ours does. */
@@ -405,7 +428,12 @@ static int syscall_gdrom(SH4CPU *cpu) {
         }
         g_gdc_last_id = g_gdc_next_id++;
         uint32_t cmd = cpu->r[4];
-        gdc_exec(cpu, cmd, cpu->r[5]);
+        int lu = gdc_exec(cpu, cmd, cpu->r[5]);
+        { uint32_t octets = 0;
+          if ((cmd == GDC_CMD_PIOREAD || cmd == GDC_CMD_DMAREAD) && lu == 0 && cpu->r[5])
+              octets = sh4_read32(cpu, cpu->r[5] + 4) * GDC_SECTOR_SIZE;
+          g_gdc_transferts[g_gdc_last_id % GDC_SUIVIS].id = g_gdc_last_id;
+          g_gdc_transferts[g_gdc_last_id % GDC_SUIVIS].octets = octets; }
         /* Tell the driver its command finished. It registered a completion
          * callback and is waiting on the drive's interrupt, so finishing
          * quietly leaves it waiting forever. */
@@ -420,6 +448,10 @@ static int syscall_gdrom(SH4CPU *cpu) {
         if (cpu->r[5]) {
             for (int i = 0; i < 4; i++)
                 sh4_write32(cpu, cpu->r[5] + i * 4, 0);
+            /* stat[2] : octets transférés par cette commande, comme le BIOS. */
+            uint32_t id = cpu->r[4];
+            if (g_gdc_transferts[id % GDC_SUIVIS].id == id)
+                sh4_write32(cpu, cpu->r[5] + 8, g_gdc_transferts[id % GDC_SUIVIS].octets);
         }
         /* Report PROCESSING once, then COMPLETED. A driver written against a
          * real drive watches for the busy->done transition; handing it

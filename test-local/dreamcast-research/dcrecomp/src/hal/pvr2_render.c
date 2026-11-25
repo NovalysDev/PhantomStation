@@ -10,6 +10,7 @@
 #include "hal/pvr2_viewport.h"
 #include "hal/dc_hardware.h"
 #include "hal/dc_ralentis.h"
+#include "hal/dc_cheats.h"
 #include "recompiler/sh4_cpu.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@ static GLint  g_uniform_screen_size;
 static GLint  g_uniform_textured;
 static GLint  g_uniform_shading, g_uniform_alpha, g_uniform_ignore_tex_alpha;
 static GLint  g_uniform_clamp_u, g_uniform_clamp_v, g_uniform_flip_u, g_uniform_flip_v, g_uniform_show_uv;
+static GLint  g_uniform_filtre;
 static GLint  g_uniform_punch, g_uniform_punch_ref;
 /* Textures gardées d'une image à l'autre. Avant, le cache était vidé à chaque
  * image : chaque texture était redécodée et renvoyée à la carte graphique à
@@ -65,13 +67,13 @@ static int texture_new(uint32_t tsp, uint32_t tcw) {
     return k;
 }
 static unsigned char *g_texture_pixels;
-typedef struct { float depth; int index; } PVR2SortIndex;
+typedef struct { float depth; int index; int first, count; } PVR2SortIndex;
 static PVR2SortIndex *g_sort_indices;
 static PVR2RenderVertex *g_sorted_vertices;
 static size_t g_sort_capacity;
 
 /* A smaller reciprocal depth is farther away. Preserve submission order for
- * equal depths. Like Flycast's PVR sort, use the triangle's smallest 1/w:
+ * equal depths. Like Flycast's PVR sort, use the smallest 1/w:
  * https://github.com/flyinghead/flycast/blob/master/core/hw/pvr/ta_util.cpp */
 static int compare_translucent(const void *left, const void *right) {
     const PVR2SortIndex *a=left, *b=right;
@@ -79,6 +81,16 @@ static int compare_translucent(const void *left, const void *right) {
     if (a->depth > b->depth) return 1;
     return (a->index > b->index) - (a->index < b->index);
 }
+static int meme_objet(const PVR2RenderVertex *a, const PVR2RenderVertex *b) {
+    return a->pcw == b->pcw && a->isp == b->isp && a->tsp == b->tsp && a->tcw == b->tcw;
+}
+/* Tri automatique, objet par objet. Un objet est une suite de triangles aux
+ * mêmes réglages (texture, mélange, profondeur) : les objets sont dessinés du
+ * plus loin au plus proche, mais chacun garde l'ordre de ses triangles voulu
+ * par le jeu. Trier triangle par triangle mêlait l'avant et l'arrière des
+ * objets faits de longs triangles : le cône du point de sauvegarde de
+ * Grandia II montrait des bandes. Le viseur de House of the Dead 2, objet à
+ * part et le plus proche, reste dessiné en dernier. */
 static const PVR2RenderVertex *sort_translucent(const PVR2TriList *list) {
     size_t triangles=(size_t)list->count/3u;
     if (!triangles || list->count%3) return list->vertices;
@@ -90,14 +102,27 @@ static const PVR2RenderVertex *sort_translucent(const PVR2TriList *list) {
         if (!vertices) return list->vertices;
         g_sorted_vertices=vertices;g_sort_capacity=triangles;
     }
+    size_t objets=0;
     for (size_t i=0;i<triangles;++i) {
         const PVR2RenderVertex *v=&list->vertices[i*3u];
         float a=isfinite(v[0].z)?v[0].z:0.0f, b=isfinite(v[1].z)?v[1].z:0.0f, c=isfinite(v[2].z)?v[2].z:0.0f;
-        g_sort_indices[i].depth=fminf(a,fminf(b,c));g_sort_indices[i].index=(int)i;
+        float d=fminf(a,fminf(b,c));
+        if (objets && meme_objet(v,&list->vertices[(size_t)g_sort_indices[objets-1].first*3u])) {
+            PVR2SortIndex *o=&g_sort_indices[objets-1];
+            if (d<o->depth) o->depth=d;
+            o->count++;
+        } else {
+            PVR2SortIndex *o=&g_sort_indices[objets++];
+            o->depth=d; o->index=(int)objets; o->first=(int)i; o->count=1;
+        }
     }
-    qsort(g_sort_indices,triangles,sizeof(*g_sort_indices),compare_translucent);
-    for (size_t i=0;i<triangles;++i)
-        memcpy(&g_sorted_vertices[i*3u],&list->vertices[(size_t)g_sort_indices[i].index*3u],3u*sizeof(*g_sorted_vertices));
+    qsort(g_sort_indices,objets,sizeof(*g_sort_indices),compare_translucent);
+    size_t sortie=0;
+    for (size_t k=0;k<objets;++k) {
+        size_t n=(size_t)g_sort_indices[k].count*3u;
+        memcpy(&g_sorted_vertices[sortie],&list->vertices[(size_t)g_sort_indices[k].first*3u],n*sizeof(*g_sorted_vertices));
+        sortie+=n;
+    }
     return g_sorted_vertices;
 }
 static int    g_width = 640;
@@ -140,26 +165,47 @@ static const char *frag_shader_src =
     "uniform bool uFlipU;\n"
     "uniform bool uFlipV;\n"
     "uniform bool uShowUV;\n"
+    "uniform int uFiltre;\n"
     "out vec4 FragColor;\n"
     /* La carte n'a que trois façons de lire hors de la texture : répéter,
-     * refléter (bits 17-18 du TSP) et bloquer au bord à 1,0 (bits 15-16). Le
+     * refléter (bits 17-18 du TSP) et bloquer au bord (bits 15-16). Le
      * blocage ne vaut que par le haut : une coordonnée négative est toujours
-     * répétée, ce qu'OpenGL ne sait pas exprimer, d'où ce calcul par fragment.
-     * Crazy Taxi reflète ainsi la moitié gauche de chaque voiture. */
-    "vec2 adresse_texture(vec2 uv) {\n"
-    "    vec2 demi = 0.5 / vec2(textureSize(uTexture, 0));\n"
-    "    if (uClampU) uv.x = min(uv.x, 1.0 - demi.x);\n"
-    "    else if (uFlipU) uv.x = 1.0 - abs(fract(uv.x * 0.5) * 2.0 - 1.0);\n"
-    "    if (uClampV) uv.y = min(uv.y, 1.0 - demi.y);\n"
-    "    else if (uFlipV) uv.y = 1.0 - abs(fract(uv.y * 0.5) * 2.0 - 1.0);\n"
-    "    return uv;\n"
+     * répétée (Crazy Taxi reflète ainsi la moitié gauche de chaque voiture).
+     * La règle s'applique à chacun des texels lus, pas à la coordonnée : lisser
+     * une coordonnée déjà reflétée ou bloquée avec une texture « répétée »
+     * mêlait au bord le côté opposé de l'image. D'où des traits clairs en croix
+     * et en carré autour des halos dessinés en miroir (Rayman 2), et un liseré
+     * sur les bords gauche et haut des textures bloquées. */
+    "int adresse(int i, int n, bool bloque, bool miroir) {\n"
+    "    if (bloque) return clamp(i, 0, n - 1);\n"
+    "    if (miroir) { int p = 2 * n; int m = i - p * int(floor(float(i) / float(p)));\n"
+    "                  return m < n ? m : p - 1 - m; }\n"
+    "    return i - n * int(floor(float(i) / float(n)));\n"
+    "}\n"
+    "vec4 lire_texture(vec2 uv) {\n"
+    "    ivec2 n = textureSize(uTexture, 0);\n"
+    "    bool bu = uClampU && uv.x >= 0.0, bv = uClampV && uv.y >= 0.0;\n"
+    "    bool mu = !uClampU && uFlipU, mv = !uClampV && uFlipV;\n"
+    "    vec2 t = uv * vec2(n);\n"
+    "    if (uFiltre == 0) {\n"
+    "        ivec2 i = ivec2(floor(t));\n"
+    "        return texelFetch(uTexture, ivec2(adresse(i.x, n.x, bu, mu), adresse(i.y, n.y, bv, mv)), 0);\n"
+    "    }\n"
+    "    t -= 0.5;\n"
+    "    vec2 f = t - floor(t);\n"
+    "    ivec2 i = ivec2(floor(t));\n"
+    "    int x0 = adresse(i.x, n.x, bu, mu), x1 = adresse(i.x + 1, n.x, bu, mu);\n"
+    "    int y0 = adresse(i.y, n.y, bv, mv), y1 = adresse(i.y + 1, n.y, bv, mv);\n"
+    "    vec4 a = texelFetch(uTexture, ivec2(x0, y0), 0), b = texelFetch(uTexture, ivec2(x1, y0), 0);\n"
+    "    vec4 c = texelFetch(uTexture, ivec2(x0, y1), 0), d = texelFetch(uTexture, ivec2(x1, y1), 0);\n"
+    "    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);\n"
     "}\n"
     "void main() {\n"
     "    vec4 color = vColor;\n"
     "    if (!uUseAlpha) color.a = 1.0;\n"
     "    if (uTextured) {\n"
-    "      vec2 uv = adresse_texture(vUV.xy / max(vUV.z, 0.000001));\n"
-    "      vec4 texel = texture(uTexture, uv);\n"
+    "      vec2 uv = vUV.xy / max(vUV.z, 0.000001);\n"
+    "      vec4 texel = lire_texture(uv);\n"
     "      if (uIgnoreTexAlpha) texel.a = 1.0;\n"
     "      if (uShowUV) color = vec4(fract(uv.x), fract(uv.y), 0.0, 1.0);\n"
     "      else if (uShading == 0) color = texel;\n"
@@ -239,6 +285,7 @@ int pvr2_render_init(int width, int height) {
     g_uniform_flip_u = glGetUniformLocation(g_shader, "uFlipU");
     g_uniform_flip_v = glGetUniformLocation(g_shader, "uFlipV");
     g_uniform_show_uv = glGetUniformLocation(g_shader, "uShowUV");
+    g_uniform_filtre = glGetUniformLocation(g_shader, "uFiltre");
     g_uniform_punch = glGetUniformLocation(g_shader, "uPunch");
     g_uniform_punch_ref = glGetUniformLocation(g_shader, "uPunchRef");
     g_texture_pixels = malloc(1024u * 1024u * 4u);
@@ -546,7 +593,7 @@ static const char *osd_frag_src =
     "             f = vec4(uCouleur.rgb, c.a * uCouleur.a); }\n";
 
 /* A-Z, 0-9, espace, point, tiret, barre, apostrophe. 5 bits par ligne. */
-static const unsigned char osd_glyphes[41][7] = {
+static const unsigned char osd_glyphes[44][7] = {
     {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E},
     {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}, {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E},
     {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}, {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10},
@@ -568,6 +615,8 @@ static const unsigned char osd_glyphes[41][7] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00}, {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C},
     {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}, {0x01,0x02,0x02,0x04,0x08,0x08,0x10},
     {0x0C,0x04,0x08,0x00,0x00,0x00,0x00},
+    {0,0,0,0,0,0,0}, {0x10,0x08,0x04,0x02,0x04,0x08,0x10},
+    {0,0x0C,0x0C,0,0x0C,0x0C,0},
 };
 
 static int osd_index(char c) {
@@ -578,6 +627,8 @@ static int osd_index(char c) {
     if (c == '-') return 38;
     if (c == '/') return 39;
     if (c == '\'') return 40;
+    if (c == '>') return 42;
+    if (c == ':') return 43;
     return 36;
 }
 
@@ -586,10 +637,10 @@ static void osd_init(void) {
 
     unsigned char atlas[OSD_TEXW * OSD_TEXH * 4];
     memset(atlas, 0, sizeof atlas);
-    for (int g = 0; g < 42; ++g) {
+    for (int g = 0; g < 44; ++g) {
         int cx = (g % OSD_COLS) * OSD_CW, cy = (g / OSD_COLS) * OSD_CH;
         for (int r = 0; r < 7; ++r) {
-            unsigned bits = g < 41 ? osd_glyphes[g][r] : 0x1Fu;
+            unsigned bits = g == 41 ? 0x1Fu : osd_glyphes[g][r];
             for (int c = 0; c < 5; ++c) {
                 if (!(bits & (1u << (4 - c)))) continue;
                 unsigned char *p = atlas + (size_t)(((cy + (7 - r)) * OSD_TEXW) + cx + c) * 4u;
@@ -650,7 +701,9 @@ static void osd_quad(OsdSommet *v, int *k, float x, float y, float w, float h,
 
 /* Appele une fois par image, juste avant l'echange des tampons. */
 void pvr2_osd_frame(void) {
-    const char *texte = dc_cinematic_message();
+    const char *texte = dc_cheats_menu_text();
+    int menu = texte != NULL;
+    if (!texte) texte = dc_cinematic_message();
     if (!texte || !*texte) return;
     if (!g_osd_shader) return;
 
@@ -659,19 +712,27 @@ void pvr2_osd_frame(void) {
     if (vw <= 0 || vh <= 0) return;
     glViewport(vx, vy, vw, vh);
 
-    int n = (int)strlen(texte);
-    if (n > 64) n = 64;
-    while (n > 0 && texte[n - 1] == ' ') --n;
-    if (n <= 0) return;
+    int offsets[10], lengths[10], lines = 0, max_len = 0, offset = 0;
+    while (texte[offset] && lines < 10) {
+        int begin = offset;
+        while (texte[offset] && texte[offset] != '\n') ++offset;
+        int n = offset - begin;
+        if (n > 64) n = 64;
+        offsets[lines] = begin; lengths[lines++] = n;
+        if (n > max_len) max_len = n;
+        if (texte[offset] == '\n') ++offset;
+    }
+    if (!max_len) return;
 
     int s = vh >= 900 ? 4 : (vh >= 600 ? 3 : 2);
-    int txt_w = n * 6 * s - s;
-    int txt_h = 7 * s;
+    while (s > 1 && (max_len * 6 * s + 8 * s > vw || (lines * 10 + 4) * s > vh)) --s;
+    int txt_w = max_len * 6 * s;
+    int txt_h = (lines * 10 + 2) * s;
     float px = 2.0f / (float)vw, py = 2.0f / (float)vh;
-    float x0 = (float)(vw - txt_w - 3 * s);
-    float y0 = (float)(3 * s);
+    float x0 = menu ? (float)((vw - txt_w) / 2) : (float)(vw - txt_w - 3 * s);
+    float y0 = menu ? (float)((vh - txt_h) / 2 + s) : (float)(3 * s);
 
-    OsdSommet v[6 * (64 + 1)];
+    OsdSommet v[6 * (10 * 64 + 1)];
 
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -686,19 +747,22 @@ void pvr2_osd_frame(void) {
     int k = 0;
     float tu = (float)((41 % OSD_COLS) * OSD_CW + 2) / (float)OSD_TEXW;
     float tv = (float)((41 / OSD_COLS) * OSD_CH + 4) / (float)OSD_TEXH;
-    osd_quad(v, &k, x0 - 2 * s, 0.0f, (float)(txt_w + 4 * s), (float)(txt_h + 5 * s), tu, tv, tu, tv, px, py);
-    glUniform4f(g_osd_couleur, 0.0f, 0.0f, 0.0f, 0.55f);
+    osd_quad(v, &k, x0 - 2 * s, y0 - 2 * s, (float)(txt_w + 4 * s), (float)(txt_h + 3 * s), tu, tv, tu, tv, px, py);
+    glUniform4f(g_osd_couleur, 0.0f, 0.0f, 0.0f, menu ? 0.88f : 0.55f);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(k * (int)sizeof(OsdSommet)), v, GL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, k);
 
     k = 0;
-    for (int i = 0; i < n; ++i) {
-        int g = osd_index(texte[i]);
-        int cx = (g % OSD_COLS) * OSD_CW, cy = (g / OSD_COLS) * OSD_CH;
-        float gx = x0 + (float)(i * 6 * s);
-        float u0 = (float)cx / OSD_TEXW, u1 = (float)(cx + 5) / OSD_TEXW;
-        float v0 = (float)(cy + 1) / OSD_TEXH, v1 = (float)(cy + 8) / OSD_TEXH;
-        osd_quad(v, &k, gx, y0, (float)(5 * s), (float)(7 * s), u0, v0, u1, v1, px, py);
+    for (int line = 0; line < lines; ++line) {
+        float gy = y0 + (float)((lines - line - 1) * 10 * s);
+        for (int i = 0; i < lengths[line]; ++i) {
+            int g = osd_index(texte[offsets[line] + i]);
+            int cx = (g % OSD_COLS) * OSD_CW, cy = (g / OSD_COLS) * OSD_CH;
+            float gx = x0 + (float)(i * 6 * s);
+            float u0 = (float)cx / OSD_TEXW, u1 = (float)(cx + 5) / OSD_TEXW;
+            float v0 = (float)(cy + 1) / OSD_TEXH, v1 = (float)(cy + 8) / OSD_TEXH;
+            osd_quad(v, &k, gx, gy, (float)(5 * s), (float)(7 * s), u0, v0, u1, v1, px, py);
+        }
     }
     glUniform4f(g_osd_couleur, 1.0f, 1.0f, 0.80f, 1.0f);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(k * (int)sizeof(OsdSommet)), v, GL_STREAM_DRAW);
@@ -748,15 +812,39 @@ void pvr2_render_frame(void) {
     for (unsigned i=0; i<1024; ++i) palette[i]=dc_hw_read32(hw, PVR_PALETTE_BASE+i*4u);
     int draw_order[] = {
         PVR2_LIST_OPAQUE,
+        PVR2_LIST_UI_BG,
         PVR2_LIST_PUNCHTHRU,
-        PVR2_LIST_TRANS
+        PVR2_LIST_TRANS,
+        PVR2_LIST_OVERLAY
     };
 
-    for (int i = 0; i < 3; i++) {
+    /* Ordre des transparents : la PowerVR2 a deux modes, choisis par le jeu
+     * dans ISP_FEED_CFG (bit 0). Pré-trié (1) : l'ordre d'envoi du jeu est
+     * gardé ; V-Rally 2 en dépend pour son panneau de choix de voiture (trié,
+     * la voiture proche passait sur le panneau et son texte). Tri automatique
+     * (0) : la console dessine du plus loin au plus proche ; House of the
+     * Dead 2 en dépend : son viseur, envoyé en premier avec la profondeur la
+     * plus proche (1/w = 2,5), passait derrière les ennemis et le décor
+     * transparents envoyés après lui. */
+    uint32_t isp_feed = dc_hw_read32(hw, 0x005f8098u);
+    int tri_auto = !(isp_feed & 1u);
+    { static int dernier = -1;
+      if (tri_auto != dernier) {
+          dernier = tri_auto;
+          printf("[PVR2] transparents : %s (ISP_FEED_CFG=%08X)\n",
+                 tri_auto ? "tri automatique par profondeur" : "ordre du jeu (pré-trié)", isp_feed);
+      } }
+
+    for (int i = 0; i < 5; i++) {
         const PVR2TriList *list = pvr2_ta_get_list(draw_order[i]);
         if (!list || list->count == 0) continue;
-        const PVR2RenderVertex *vertices = draw_order[i] == PVR2_LIST_TRANS ? sort_translucent(list) : list->vertices;
-        glUniform1i(g_uniform_punch,draw_order[i] == PVR2_LIST_PUNCHTHRU);
+        int overlay = draw_order[i] == PVR2_LIST_OVERLAY;
+        int ui_bg = draw_order[i] == PVR2_LIST_UI_BG;
+        if (ui_bg || overlay) glDisable(GL_DEPTH_TEST);
+        else glEnable(GL_DEPTH_TEST);
+        const PVR2RenderVertex *vertices =
+            (draw_order[i] == PVR2_LIST_TRANS && tri_auto) ? sort_translucent(list) : list->vertices;
+        glUniform1i(g_uniform_punch,!overlay && draw_order[i] == PVR2_LIST_PUNCHTHRU);
         glUniform1f(g_uniform_punch_ref,(float)(dc_hw_read32(hw,0x005f811cu)&0xffu));
 
         /* Upload vertex data */
@@ -764,8 +852,8 @@ void pvr2_render_frame(void) {
                      (GLsizeiptr)(list->count * sizeof(PVR2RenderVertex)),
                      vertices, GL_STREAM_DRAW);
 
-        /* Blending for translucent list */
-        if (draw_order[i] == PVR2_LIST_TRANS) {
+        /* Blending for translucent list, panel backing and 2D overlay. */
+        if (ui_bg || overlay || draw_order[i] == PVR2_LIST_TRANS) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glDepthMask(GL_FALSE);
@@ -915,16 +1003,22 @@ void pvr2_render_frame(void) {
               if (from < 0) { const char *a = getenv("DCRECOMP_TRACE_GEOM_FROM"), *b = getenv("DCRECOMP_TRACE_GEOM_TO");
                               from = a ? atoi(a) : 0; to = b ? atoi(b) : 0; }
               if (from && dbg_frame >= (unsigned)from && dbg_frame <= (unsigned)to)
-                  printf("[GEOM] frame %u list=%d count=%d pcw=%08X tsp=%08X tcw=%08X tex=%d %dx%d xy=%.0f,%.0f uv=%.3f,%.3f\n",
-                         dbg_frame, draw_order[i], end - first, v->pcw, v->tsp, v->tcw, textured, w, h, v->x, v->y, v->u, v->v); }
+                  printf("[GEOM] frame %u list=%d count=%d pcw=%08X tsp=%08X tcw=%08X tex=%d %dx%d xy=%.0f,%.0f uv=%.3f,%.3f rgba=%.2f,%.2f,%.2f,%.2f\n",
+                         dbg_frame, draw_order[i], end - first, v->pcw, v->tsp, v->tcw, textured, w, h, v->x, v->y, v->u, v->v,
+                         v->r, v->g, v->b, v->a); }
             if (dbg_at && dbg_frame == (unsigned)dbg_at)
                 printf("[GEOM] list=%d count=%d pcw=%08X isp=%08X tsp=%08X tcw=%08X tex=%d xyz=%.1f,%.1f,%.8g uv=%.3f,%.3f rgba=%.2f,%.2f,%.2f,%.2f\n", draw_order[i],end-first,v->pcw,v->isp,v->tsp,v->tcw,textured,v->x,v->y,v->z,v->u,v->v,v->r,v->g,v->b,v->a);
             static const GLenum comparisons[8] = { GL_NEVER, GL_LESS, GL_EQUAL, GL_LEQUAL,
                                                     GL_GREATER, GL_NOTEQUAL, GL_GEQUAL, GL_ALWAYS };
-            glDepthFunc(draw_order[i] == PVR2_LIST_PUNCHTHRU || draw_order[i] == PVR2_LIST_TRANS ? GL_GEQUAL : comparisons[(v->isp >> 29) & 7u]);
-            glDepthMask(draw_order[i] == PVR2_LIST_TRANS ? GL_FALSE :
-                        draw_order[i] == PVR2_LIST_PUNCHTHRU ? GL_TRUE :
-                        (v->isp & (1u << 26)) ? GL_FALSE : GL_TRUE);
+            if (ui_bg || overlay) {
+                glDepthFunc(GL_ALWAYS);
+                glDepthMask(GL_FALSE);
+            } else {
+                glDepthFunc(draw_order[i] == PVR2_LIST_PUNCHTHRU || draw_order[i] == PVR2_LIST_TRANS ? GL_GEQUAL : comparisons[(v->isp >> 29) & 7u]);
+                glDepthMask(draw_order[i] == PVR2_LIST_TRANS ? GL_FALSE :
+                            draw_order[i] == PVR2_LIST_PUNCHTHRU ? GL_TRUE :
+                            (v->isp & (1u << 26)) ? GL_FALSE : GL_TRUE);
+            }
             glUniform1i(g_uniform_textured, textured);
             glUniform1i(g_uniform_shading, (v->tsp >> 6) & 3);
             glUniform1i(g_uniform_alpha, (v->tsp >> 20) & 1);
@@ -936,6 +1030,16 @@ void pvr2_render_frame(void) {
             }
             if (textured) {
                 glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture);
+                /* Le polygone choisit son filtre (TSP bits 14-13) : 0 = point par
+                 * point, 1 = bilinéaire, 2-3 = trilinéaire (lissé ici). Toujours
+                 * lisser faisait mêler à chaque morceau d'image le bord opposé de
+                 * sa texture répétée : un trait sombre à chaque jointure des images
+                 * en morceaux (titre de House of the Dead 2 : 5 bandes 128x512).
+                 * PHANTOM_DC_TEXTURES_LISSEES=1 revient à l'ancien lissage. */
+                { static int lisse = -1;
+                  if (lisse < 0) { const char *e = getenv("PHANTOM_DC_TEXTURES_LISSEES"); lisse = e && atoi(e) ? 1 : 0; }
+                  /* Le nuanceur lit lui-même les texels (lire_texture). */
+                  glUniform1i(g_uniform_filtre, (lisse || ((v->tsp >> 13) & 3u)) ? 1 : 0); }
                 int clamp_u=(v->tsp & (1u<<16))!=0,clamp_v=(v->tsp & (1u<<15))!=0;
                 int flip_u=(v->tsp & (1u<<18))!=0,flip_v=(v->tsp & (1u<<17))!=0;
                 /* A full-image sprite tile should not sample the opposite
@@ -968,6 +1072,7 @@ void pvr2_render_frame(void) {
                diag_pcw,diag_tsp,diag_tcw,(dc_hw_read32(hw,0x005f80e4u)&31u)*32u,palette_format);
 
     /* Reset state */
+    glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 

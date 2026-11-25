@@ -35,6 +35,34 @@ kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
 kernel32.QueryInformationJobObject.argtypes = (HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p)
 kernel32.QueryInformationJobObject.restype = wintypes.BOOL
 kernel32.CloseHandle.argtypes = (HANDLE,)
+kernel32.SetInformationJobObject.argtypes = (HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+kernel32.SetInformationJobObject.restype = wintypes.BOOL
+kernel32.TerminateJobObject.argtypes = (HANDLE, wintypes.UINT)
+kernel32.TerminateJobObject.restype = wintypes.BOOL
+
+
+class _LimitesDeBase(ctypes.Structure):
+    _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD), ('SchedulingClass', wintypes.DWORD)]
+
+
+class _Limites(ctypes.Structure):
+    _fields_ = [('BasicLimitInformation', _LimitesDeBase), ('IoInfo', ctypes.c_uint64 * 6),
+                ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+
+def _fermer_avec_phantomstation(job):
+    """Les programmes du jeu se ferment avec PhantomStation, même fermé de force :
+    sans cela, un jeu figé survivait sans fenêtre et son son continuait."""
+    limites = _Limites()
+    limites.BasicLimitInformation.LimitFlags = 0x2000   # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    return kernel32.SetInformationJobObject(job, 9, ctypes.byref(limites), ctypes.sizeof(limites))
+
+# Un jeu qui n'a pas quitté après « Quitter le jeu » est arrêté de force.
+DELAI_FERMETURE_FORCEE = 6.0
 
 
 class GameInCompiler:
@@ -60,29 +88,41 @@ class GameInCompiler:
         self.trial_token = None
         self.trial_log_stamp = None
         self.debug_active = False
+        # Jeu mis de côté par « Retour au compilateur » : toujours ouvert, et le
+        # cadre « Jeu en cours » permet d'y retourner ou de le quitter.
+        self.hidden = False
+        self.game_bar = None
+        self.game_bar_label = None
+        self.bar_buttons = []
+        # Lanceur seul (réglages, JOUER) ou partie lancée : None tant qu'on ne sait pas.
+        self.playing = None
+        self.quit_button = None
         self.root.bind_all('<F10>', self._compiler_f10, add='+')
 
     def start(self, exe, env=None):
         if self.process is not None:
-            raise ValueError('Un jeu est déjà ouvert dans PhantomStation.')
+            raise ValueError('Un jeu est déjà ouvert dans PhantomStation. Utilise « Retour au jeu » ou « Quitter le jeu ».')
         exe = Path(exe)
         actual = exe
         environment = os.environ.copy() if env is None else env.copy()
         environment.pop('PHANTOM_PACKAGE_PATH', None)
         for key in ('PHANTOM_SELECTED_PS1_CARD_DIR', 'PHANTOM_SELECTED_PS1_CARD1', 'PHANTOM_SELECTED_PS1_CARD2', 'PHANTOM_SELECTED_PS2_CARD', 'PHANTOM_SELECTED_PS2_CARD2',
-                    'PHANTOM_SELECTED_DC_CARD', 'PHANTOM_SELECTED_PROFILE_DIR', 'PHANTOM_DC_TRIAL', 'PHANTOM_DC_TRIAL_TOKEN'):
+                    'PHANTOM_SELECTED_DC_CARD', 'PHANTOM_SELECTED_PROFILE_DIR', 'PHANTOM_DEBUG_SAVE_DIR', 'PHANTOM_DC_TRIAL', 'PHANTOM_DC_TRIAL_TOKEN'):
             environment.pop(key, None)
         environment['PHANTOM_LANGUAGE'] = load_language()
         from bibliotheque import game_info
         from cartes_memoire import launch_environment, backup_selected
         info = game_info(exe, include_cover=False)
         self.game_info = info
-        selected = launch_environment(info)
-        debug_active = False
-        self.debug_active = False
+        from diagnostic_debug import launch_environment as debug_environment
+        selected = debug_environment(info)
+        debug_active = bool(selected)
+        self.debug_active = debug_active
         self.trial_hash = None
         self.trial_token = None
         self.trial_log_stamp = None
+        if not debug_active:
+            selected = launch_environment(info)
         if info.get('platform') == 'DC' and not debug_active:
             from phantom_dc_autolearn import candidate
             try:
@@ -98,7 +138,7 @@ class GameInCompiler:
                     tr('La version d’essai est illisible ; le moteur habituel sera utilisé.'), parent=self.root)
         self.save_selection = dict(selected)
         environment.update(selected)
-        if selected:
+        if selected and not debug_active:
             backup_selected(info['platform'])
             if info['platform'] in ('PS1', 'PS2'): backup_selected(info['platform'], 2)
         # Use current reporting and launch fixes for already-created games too.
@@ -124,6 +164,8 @@ class GameInCompiler:
         self.job = kernel32.CreateJobObjectW(None, None)
         if not self.job:
             raise OSError(ctypes.get_last_error(), 'Impossible de préparer la fenêtre du jeu.')
+        _fermer_avec_phantomstation(self.job)
+        self.closing_since = None
         try:
             self.process = subprocess.Popen([str(actual)], cwd=str(exe.parent), env=environment)
             if not kernel32.AssignProcessToJobObject(self.job, HANDLE(int(self.process._handle))):
@@ -141,11 +183,17 @@ class GameInCompiler:
         self.overlay.lift()
         toolbar = ctk.CTkFrame(self.overlay, fg_color='#101d31', corner_radius=0, height=48)
         toolbar.pack(fill='x')
-        button(toolbar, '← Retour au compilateur', self.close_game, width=200).pack(side='left', padx=10, pady=6)
+        button(toolbar, '← Retour au compilateur', self.show_compiler, width=200).pack(side='left', padx=10, pady=6)
+        self.playing = None
+        self.quit_button = button(toolbar, '✕ Fermer le lanceur', self.close_game, width=170)
+        self.quit_button.pack(side='left', padx=(0, 10), pady=6)
         ctk.CTkLabel(toolbar, text=tr('F10 : signaler un bug'), text_color=MUTED).pack(side='right', padx=12)
         if info.get('platform') == 'DC':
-            ctk.CTkLabel(toolbar, text=tr('F11 : activer/désactiver les codes'), text_color=MUTED).pack(side='right', padx=12)
-        if self.trial_hash:
+            label = 'F11 : choisir les codes' if info.get('id') == 'ce11ad99f90d49bdb4b21cd8be1829a9' else 'F11 : activer/désactiver les codes'
+            ctk.CTkLabel(toolbar, text=tr(label), text_color=MUTED).pack(side='right', padx=12)
+        if debug_active:
+            ctk.CTkLabel(toolbar, text=tr('SAUVEGARDE DE DÉBOGAGE ACTIVE'), text_color='#f7c66b').pack(side='right', padx=12)
+        elif self.trial_hash:
             ctk.CTkLabel(toolbar, text=tr('VERSION D’ESSAI DU JEU'), text_color='#f7c66b').pack(side='right', padx=12)
         self.status = tk.StringVar(value=tr('Ouverture du jeu…'))
         ctk.CTkLabel(toolbar, textvariable=self.status, text_color=TEXT, anchor='w').pack(side='left', fill='x', expand=True, padx=12)
@@ -209,7 +257,7 @@ class GameInCompiler:
         self.resize()
         user32.SetWindowPos(hwnd, None, 0, 0, max(1, self.surface.winfo_width()),
                             max(1, self.surface.winfo_height()), 0x0054)
-        self.status.set(tr('Le jeu est ouvert dans PhantomStation.'))
+        self._refresh_mode(force=True)
         return True
 
     def _poll(self):
@@ -236,19 +284,30 @@ class GameInCompiler:
                 # A modal settings window of the same launcher also belongs inside.
                 candidates = self._windows({current_pid.value})
                 if candidates:
+                    # Une fenêtre du jeu (erreur, réglages) ne reste pas cachée.
+                    if self.hidden and not self.closing: self.show_game()
                     previous = self.child
                     if self._attach(candidates[0]):
                         self.windows.append(previous)
             else:
                 candidates = self._windows(pids)
                 if candidates:
+                    if self.hidden and not self.closing: self.show_game()
                     self._attach(candidates[0])
+            if self.child: self._refresh_mode(pids)
             if self.closing and self.child and user32.IsWindow(self.child):
                 import time
                 now = time.monotonic()
                 if now - self.last_close >= 2:
                     user32.PostMessageW(self.child, 0x0010, 0, 0)
                     self.last_close = now
+            if self.closing and self.job and getattr(self, 'closing_since', None) is not None:
+                import time
+                # Un jeu figé ne traite plus la demande de fermeture : arrêt forcé.
+                if time.monotonic() - self.closing_since >= DELAI_FERMETURE_FORCEE:
+                    kernel32.TerminateJobObject(self.job, 1)
+                    self.closing_since = None
+                    self.status.set(tr('Le jeu ne répondait plus : arrêt forcé.'))
             self.after_id = self.root.after(80, self._poll)
         except (OSError, tk.TclError) as exc:
             self.pending_report = None
@@ -445,10 +504,96 @@ class GameInCompiler:
         finally:
             self.report_open = False
 
+    def show_compiler(self):
+        """Revient au compilateur sans fermer le jeu.
+
+        Le jeu continue, simplement placé hors de la fenêtre : sa fenêtre reste
+        « visible » pour Windows, donc toujours suivie et toujours fermable. Le
+        cadre « Jeu en cours » permet d'y retourner ou de le quitter."""
+        if self.overlay is None or self.hidden or self.closing:
+            return
+        self.hidden = True
+        self.overlay.place_configure(x=-20000, y=0)
+        self._show_bar()
+        try: self.root.focus_force()
+        except tk.TclError: pass
+
+    def show_game(self):
+        """Retour au jeu mis de côté par « Retour au compilateur »."""
+        if self.overlay is None:
+            return
+        self.hidden = False
+        self._destroy_bar()
+        self.overlay.place_configure(x=0, y=0)
+        self.overlay.lift()
+        self.resize()
+
+    def _texts(self):
+        """Textes selon ce qui est ouvert : le lanceur seul ou une partie."""
+        name = (self.game_info or {}).get('name') or tr('Jeu')
+        if self.playing:
+            return {'statut': tr('Partie en cours.'), 'cadre': tr('Partie en cours : ') + name,
+                    'retour': tr('▶ Retour au jeu'), 'fermer': tr('✕ Quitter le jeu'),
+                    'fermeture': tr('Fermeture du jeu…')}
+        return {'statut': tr('Lanceur du jeu : appuie sur JOUER pour lancer la partie.'),
+                'cadre': tr('Lanceur ouvert : ') + name, 'retour': tr('▶ Retour au lanceur'),
+                'fermer': tr('✕ Fermer le lanceur'), 'fermeture': tr('Fermeture du lanceur…')}
+
+    def _refresh_mode(self, pids=None, force=False):
+        """Partie lancée = un autre programme que le lanceur tourne dans le jeu
+        (le moteur, ou l'animation d'ouverture qui le précède)."""
+        if self.closing or self.overlay is None or self.process is None:
+            return
+        if pids is None:
+            try: pids = self._processes()
+            except OSError: return
+        playing = bool(set(pids) - {self.process.pid})
+        if playing == self.playing and not force:
+            return
+        self.playing = playing
+        texts = self._texts()
+        self.status.set(texts['statut'])
+        if self.quit_button is not None:
+            self.quit_button.configure(text=texts['fermer'])
+        if self.game_bar_label is not None and len(self.bar_buttons) == 2:
+            self.game_bar_label.set(texts['cadre'])
+            self.bar_buttons[0].configure(text=texts['retour'])
+            self.bar_buttons[1].configure(text=texts['fermer'])
+
+    def _show_bar(self):
+        if self.game_bar is not None:
+            self.game_bar.lift()
+            return
+        texts = self._texts()
+        bar = ctk.CTkFrame(self.root, fg_color='#101d31', corner_radius=12, border_width=1, border_color='#2f4a6b')
+        self.game_bar_label = tk.StringVar(value=texts['cadre'])
+        ctk.CTkLabel(bar, textvariable=self.game_bar_label, text_color=TEXT).pack(side='left', padx=(14, 10), pady=8)
+        self.bar_buttons = [button(bar, texts['retour'], self.show_game, primary=True, width=170),
+                            button(bar, texts['fermer'], self.close_game, width=170)]
+        for widget in self.bar_buttons:
+            widget.pack(side='left', padx=(0, 10), pady=8)
+        bar.place(relx=1.0, x=-12, y=12, anchor='ne')
+        bar.lift()
+        self.game_bar = bar
+
+    def _destroy_bar(self):
+        if self.game_bar is not None:
+            try: self.game_bar.destroy()
+            except tk.TclError: pass
+        self.game_bar = None
+        self.game_bar_label = None
+        self.bar_buttons = []
+
     def close_game(self):
         import time
+        if not self.closing: self.closing_since = time.monotonic()
         self.closing = True
-        self.status.set(tr('Fermeture du jeu…'))
+        closing_text = self._texts()['fermeture']
+        self.status.set(closing_text)
+        if self.game_bar_label is not None:
+            self.game_bar_label.set(closing_text)
+            for widget in self.bar_buttons:
+                widget.configure(state='disabled')
         if self.child and user32.IsWindow(self.child):
             user32.PostMessageW(self.child, 0x0010, 0, 0)
             self.last_close = time.monotonic()
@@ -465,11 +610,13 @@ class GameInCompiler:
         if self.previous_protocol is not None:
             self.root.tk.call('wm', 'protocol', self.root._w, 'WM_DELETE_WINDOW', self.previous_protocol)
             self.previous_protocol = None
+        self._destroy_bar(); self.hidden = False
         if self.overlay is not None:
             self.overlay.destroy(); self.overlay = None
         if self.job:
             kernel32.CloseHandle(self.job); self.job = None
         self.process = None; self.child = None; self.windows = []; self.closing = False
+        self.playing = None; self.quit_button = None
         self.trial_hash = None; self.trial_log_stamp = None; self.trial_token = None; self.debug_active = False
         self.root.deiconify(); self.root.lift(); self.root.focus_force()
         used_trial = self._trial_was_used(info, token) if info and token else False

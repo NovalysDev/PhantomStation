@@ -7,15 +7,14 @@
  *   cheat0_desc = "Argent infini"
  *   cheat0_address = "14869692"      offset decimal dans la RAM (16 Mo)
  *   cheat0_value = "99999999"        valeur decimale
- *   cheat0_memory_search_size = "4"  1, 2 ou 4 octets
+ *   cheat0_memory_search_size = "5"  RetroArch : 3/4/5 pour 8/16/32 bits
  *   cheat0_enable = "false"
  *
  * Aucun dechiffrement n'est necessaire : la base ne stocke pas des codes
  * Action Replay mais des couples adresse/valeur deja resolus.
  *
- * Activation d'un code : mettre cheatN_enable a "true", ou ecrire son
- * numero sur une ligne de phantom-cheats.txt (une ligne "# 3 Argent" est
- * un commentaire, retirer le "#" active le code 3).
+ * Selection individuelle dans le menu F11. Les formats non pris en charge
+ * ne sont pas proposes pour eviter une ecriture incorrecte en RAM.
  *
  * Fichier cherche dans cet ordre : PHANTOM_DC_CHEATS, phantom-cheats.cht,
  * cheats/phantom-cheats.cht.
@@ -29,6 +28,8 @@
 #include "recompiler/sh4_cpu.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,9 @@ typedef struct {
     int       size;
     int       enable;
     int       defini;
+    int       adresse_presente, valeur_presente, taille_presente;
+    int       taille_retro, type, handler, repetition, big_endian;
+    int       compatible;
 } CodeTriche;
 
 static CodeTriche g_codes[CHEATS_MAX];
@@ -55,6 +59,7 @@ static unsigned    g_image;
 static unsigned    g_delai_images = 300u;   /* 5 s a 60 images/s */
 static char        g_fichier[400];
 static char        g_base[400];
+static int         g_menu, g_selection;
 
 static char *nettoie(char *s) {
     while (*s && isspace((unsigned char)*s)) ++s;
@@ -62,6 +67,16 @@ static char *nettoie(char *s) {
     while (fin > s && isspace((unsigned char)fin[-1])) --fin;
     *fin = 0;
     return s;
+}
+
+static int entier_decimal(const char *s, unsigned *out) {
+    char *end;
+    if (!s || !isdigit((unsigned char)*s)) return 0;
+    errno = 0;
+    unsigned long value = strtoul(s, &end, 10);
+    if (errno || *end || value > UINT_MAX) return 0;
+    *out = (unsigned)value;
+    return 1;
 }
 
 /* "cheat12_desc = \"texte\"" -> index 12, cle "desc", valeur "texte". */
@@ -165,9 +180,17 @@ static int charge_fichier(const char *chemin) {
         if (!decoupe(ligne, &index, cle, sizeof(cle), valeur, sizeof(valeur))) continue;
         CodeTriche *c = &g_codes[index];
         if (meme_debut(cle, "desc")) { snprintf(c->desc, sizeof(c->desc), "%s", valeur); c->defini = 1; }
-        else if (meme_debut(cle, "address")) { c->address = (unsigned)strtoul(valeur, 0, 10); }
-        else if (meme_debut(cle, "value")) { c->value = (unsigned)strtoul(valeur, 0, 10); }
-        else if (meme_debut(cle, "memory_search_size")) { c->size = atoi(valeur); }
+        else if (!strcmp(cle, "address")) c->adresse_presente = entier_decimal(valeur, &c->address);
+        else if (!strcmp(cle, "value")) c->valeur_presente = entier_decimal(valeur, &c->value);
+        else if (!strcmp(cle, "memory_search_size")) {
+            unsigned size;
+            c->taille_presente = entier_decimal(valeur, &size) && size <= 5;
+            if (c->taille_presente) c->taille_retro = (int)size;
+        }
+        else if (!strcmp(cle, "cheat_type")) c->type = atoi(valeur);
+        else if (!strcmp(cle, "handler")) c->handler = atoi(valeur);
+        else if (!strcmp(cle, "repeat_count")) c->repetition = atoi(valeur);
+        else if (!strcmp(cle, "big_endian")) c->big_endian = (valeur[0]=='t' || valeur[0]=='T' || valeur[0]=='1');
         else if (meme_debut(cle, "enable")) { c->enable = (valeur[0] == 't' || valeur[0] == 'T' || valeur[0] == '1'); }
     }
     fclose(f);
@@ -208,15 +231,26 @@ static void charge(void) {
     int actifs = 0, listes = 0;
     for (int i = 0; i < g_nb; ++i) {
         CodeTriche *c = &g_codes[i];
-        if (c->size != 1 && c->size != 2 && c->size != 4) c->size = 4;
+        c->size = c->taille_retro == 3 ? 1 : c->taille_retro == 4 ? 2 : c->taille_retro == 5 ? 4 : 0;
+        unsigned off = c->address;
+        if (off >= 0x8c000000u && off < 0x8d000000u) off -= 0x8c000000u;
+        else if (off >= 0x0c000000u && off < 0x0d000000u) off -= 0x0c000000u;
+        c->compatible = c->defini && c->adresse_presente && c->valeur_presente && c->taille_presente &&
+            c->size && off < 0x01000000u && off + (unsigned)c->size <= 0x01000000u &&
+            (c->size == 4 || c->value < (1u << (8 * c->size))) &&
+            c->type == 1 && c->handler == 1 && c->repetition <= 1 && !c->big_endian;
+        if (!c->compatible) c->enable = 0;
         if (c->defini) ++listes;
         if (c->defini && c->enable) ++actifs;
     }
     charge_liste_texte();
     actifs = 0;
-    for (int i = 0; i < g_nb; ++i) if (g_codes[i].defini && g_codes[i].enable) ++actifs;
+    for (int i = 0; i < g_nb; ++i) {
+        if (!g_codes[i].compatible) g_codes[i].enable = 0;
+        if (g_codes[i].compatible && g_codes[i].enable) ++actifs;
+    }
 
-    printf("[CHEAT] fichier=%s codes=%d actifs=%d (F11 pour couper)\n",
+    printf("[CHEAT] fichier=%s codes=%d actifs=%d (F11 pour choisir)\n",
            g_fichier, listes, actifs);
     int montres = 0;
     for (int i = 0; i < g_nb && montres < CHEATS_LIGNES_LOG; ++i) {
@@ -226,7 +260,7 @@ static void charge(void) {
         ++montres;
     }
     if (!actifs)
-        printf("[CHEAT] aucun code actif : ecris son numero dans phantom-cheats.txt\n");
+        printf("[CHEAT] aucun code actif : selectionne-le dans le menu F11\n");
     g_charges = 1;
 }
 
@@ -238,7 +272,7 @@ static void applique(void) {
     int ecrits = 0;
     for (int i = 0; i < g_nb; ++i) {
         CodeTriche *c = &g_codes[i];
-        if (!c->defini || !c->enable) continue;
+        if (!c->compatible || !c->enable) continue;
         /* Deux conventions circulent : offset brut dans la RAM, ou adresse
          * de jeu 0x8Cxxxxxx / 0x0Cxxxxxx. */
         unsigned off = c->address;
@@ -277,3 +311,54 @@ void dc_cheats_toggle(void) {
 }
 
 int dc_cheats_active(void) { return g_actifs; }
+
+static int menu_count(void) {
+    int count = 0;
+    for (int i=0; i<g_nb; ++i) if (g_codes[i].compatible) ++count;
+    return count;
+}
+
+static int menu_index(int row) {
+    for (int i=0; i<g_nb; ++i)
+        if (g_codes[i].compatible && row-- == 0) return i;
+    return -1;
+}
+
+void dc_cheats_menu_toggle(void) {
+    if (!g_charges) charge();
+    g_menu = !g_menu;
+    if (g_selection >= menu_count()) g_selection = 0;
+}
+int dc_cheats_menu_is_open(void) { return g_menu; }
+void dc_cheats_menu_move(int direction) {
+    int count = menu_count();
+    if (!g_menu || !count || !direction) return;
+    g_selection = (g_selection + (direction > 0 ? 1 : count - 1)) % count;
+}
+void dc_cheats_menu_select(void) {
+    if (!g_menu) return;
+    int index = menu_index(g_selection);
+    if (index < 0) return;
+    g_codes[index].enable = !g_codes[index].enable;
+    printf("[CHEAT] %s : %s\n", g_codes[index].desc, g_codes[index].enable ? "actif" : "inactif");
+}
+const char *dc_cheats_menu_text(void) {
+    static char text[1024];
+    if (!g_menu) return NULL;
+    int count = menu_count();
+    size_t pos = (size_t)snprintf(text, sizeof text, "CODES DE TRICHE - CETTE PARTIE\n");
+    if (!count) {
+        snprintf(text + pos, sizeof text - pos, "AUCUN CODE COMPATIBLE POUR CE JEU\nF11 POUR FERMER");
+        return text;
+    }
+    int start = (g_selection / 6) * 6;
+    for (int row=start; row<count && row<start+6; ++row) {
+        int index = menu_index(row);
+        int written = snprintf(text + pos, sizeof text - pos, "%c %s %.42s\n",
+            row == g_selection ? '>' : ' ', g_codes[index].enable ? "ON " : "OFF", g_codes[index].desc);
+        if (written < 0 || (size_t)written >= sizeof text - pos) break;
+        pos += (size_t)written;
+    }
+    snprintf(text + pos, sizeof text - pos, "HAUT BAS : CHOISIR  ENTREE/A : ACTIVER\nF11/B : FERMER  %d/%d", g_selection+1, count);
+    return text;
+}

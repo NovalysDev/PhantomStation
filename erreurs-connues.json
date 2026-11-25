@@ -28,7 +28,7 @@
       ],
       "titre": "Bourdon / gresillement audio permanent",
       "symptome": "Bourdon continu ou gresillement en jeu, parfois pris pour un defaut du mixage.",
-      "cause": "La banque AICA de Grandia II contient un echantillon constant (0x3FAC, PCM16 toujours a 16383) joue en boucle : ce n'est pas le mixeur, c'est une alarme du jeu. La 7e voix de cette alarme (0x3FAC) est celle qui sature ; 0x4070 est un vrai bip de menu et ne doit pas etre coupe.",
+      "cause": "La banque AICA de Grandia II contient un echantillon constant (0x3FAC, PCM16 toujours a 16383) joue en boucle : ce n'est pas le mixeur, c'est une alarme du jeu. La 7e voix de cette alarme (0x3FAC) est celle qui sature ; 0x4070 est un vrai bip de menu et ne doit pas etre coupe. CAUSE REELLE trouvee le 2026-11-25 : 0x3FAC et 0x4070 sont les bips de secours du pilote son, joues quand sa table de banques de sons a ete effacee par une course au demarrage (voir dc-pilote-son-course-banques). La coupure de 0x3FAC reste en filet de securite.",
       "correctif": "Muter uniquement la voix a l'adresse AICA 0x3FAC dans aica_pcm.c. Ne pas muter 0x4070 : le son disparaitrait.",
       "controle": {
         "fichier": "aica_pcm.c",
@@ -65,6 +65,310 @@
       "cause": "Les collections pnach ne couvrent pas ce numero de serie, ou le CRC de l'ELF ne correspond pas.",
       "correctif": "Non bloquant : le jeu se compile sans codes. Ne pas relancer la compilation pour ce motif.",
       "date": "2026-11-08",
+      "verifie": true
+    },
+    {
+      "id": "dc-apprentissage-perdu-autre-pc",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Passages deja corriges (boss...) de nouveau casses apres un changement de PC",
+      "symptome": "Apres copie du projet sur un autre PC ou recompilation, des boss ou scenes qui marchaient ne marchent plus ; journal du jeu : [DISPATCH] unresolved call.",
+      "cause": "L'apprentissage (code charge par le jeu et traduit apres coup) etait seulement dans %LOCALAPPDATA%\\PhantomStation\\Dreamcast-apprentissage : ni dans le projet ni dans le jeu compile.",
+      "correctif": "Le jeu compile range son apprentissage (apprentissage/) et l'empreinte de son moteur (moteur.txt) ; la compilation et la preparation apres une partie le reprennent automatiquement.",
+      "controle": {
+        "fichier": "phantom_dreamcast.py",
+        "motifs": [
+          "fichiers_a_ranger"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-programmes-voisins-afs",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Boss ou niveaux non traduits tant qu'on ne les a pas atteints",
+      "symptome": "Un boss ou un niveau charge depuis le disque ne marche pas la premiere fois (House of the Dead 2 : 6 boss dans BOSS.AFS, tous en 0x8C4ACA20).",
+      "cause": "Les programmes interchangeables sont ranges dans une archive AFS et charges a la meme adresse ; une partie n'en charge qu'un a la fois.",
+      "correctif": "apprentissage.programmes_voisins : quand un programme appris est une entree d'archive AFS, toutes ses voisines qui commencent comme une fonction sont traduites a la meme adresse.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/apprentissage.py",
+        "motifs": [
+          "def programmes_voisins"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-fonctions-entre-programmes",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Fonction du jeu appelee par un programme charge (boss) non traduite",
+      "symptome": "Boss sans viseur ni tirs ; journal : [DISPATCH] unresolved call to 0x0C43A564 (pr dans le programme du boss).",
+      "cause": "Le programme charge designe des fonctions du programme du jeu par des adresses rangees dans ses donnees : rien dans le programme du jeu n'y mene.",
+      "correctif": "apprentissage.pointeurs_entre_programmes : ces adresses deviennent des entrees du programme designe si elles tombent sur un vrai debut de fonction (_prologue).",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/apprentissage.py",
+        "motifs": [
+          "def pointeurs_entre_programmes"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-traits-jointures-filtre",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Traits sombres aux jointures des images (rendu x2 ou plus)",
+      "symptome": "Grille de fins traits sur les images en morceaux (menu de House of the Dead 2 en x2).",
+      "cause": "Le moteur lissait toutes les textures alors que le jeu demande l'affichage point par point (TSP bits 14-13 = 0).",
+      "correctif": "pvr2_render.c applique le filtre demande par chaque polygone (uniforme uFiltre) ; PHANTOM_DC_TEXTURES_LISSEES=1 revient a l'ancien lissage.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/src/hal/pvr2_render.c",
+        "motifs": [
+          "uFiltre"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-tri-transparents",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Viseur ou element 2D cache derriere le decor",
+      "symptome": "Le viseur de House of the Dead 2 passe derriere les zombies et une tour.",
+      "cause": "La liste transparente etait dessinee dans l'ordre d'envoi, puis triee triangle par triangle. La PowerVR2 trie par profondeur en tri automatique (ISP_FEED_CFG bit 0 = 0), choisi par House of the Dead 2, Grandia II et V-Rally 2.",
+      "correctif": "pvr2_render.c trie la liste transparente objet par objet (suite de triangles aux memes reglages), seulement en tri automatique, et garde l'ordre du jeu en pre-trie (V-Rally 2). Le tri triangle par triangle melait l'avant et l'arriere des objets : cone du point de sauvegarde de Grandia II.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/src/hal/pvr2_render.c",
+        "motifs": [
+          "meme_objet"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-bords-textures-miroir",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Traits clairs en croix et en carre autour de halos",
+      "symptome": "Fines lignes autour de certains halos (Rayman 2) et liseres sur les bords gauche et haut des textures bloquees. Verifie le 24/11 sur Rayman 2 (scene des Lums bleus, image 6150 : croix et carres avant, halos propres apres).",
+      "cause": "Le miroir et le blocage etaient appliques a la coordonnee, puis la carte lissait en repetant l'image : le bord melait le cote oppose.",
+      "correctif": "pvr2_render.c lit lui-meme les 4 texels (lire_texture) et applique a chacun repeter / refleter / bloquer.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/src/hal/pvr2_render.c",
+        "motifs": [
+          "lire_texture"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-moteur-ancien",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Jeu deja compile sans les dernieres corrections du moteur",
+      "symptome": "Un defaut corrige dans le compilateur reste visible dans un jeu compile avant la correction.",
+      "cause": "Le moteur est integre au jeu au moment de la compilation.",
+      "correctif": "phantom_dc_autolearn.prepare compare l'empreinte du moteur du jeu a celle du compilateur et prepare une version d'essai a jour apres une partie.",
+      "controle": {
+        "fichier": "phantom_dc_autolearn.py",
+        "motifs": [
+          "_moteur_du_jeu"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": false
+    },
+    {
+      "id": "jeu-fige-impossible-a-quitter",
+      "console": "TOUTES",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Jeu fige : Quitter le jeu sans effet, son qui continue apres fermeture",
+      "symptome": "Quitter le jeu et F11 ne repondent plus ; fermer PhantomStation au gestionnaire des taches laisse le son du jeu en fond.",
+      "cause": "Un jeu fige ne traite plus la demande de fermeture et le compilateur la renvoyait sans fin ; les programmes du jeu survivaient a PhantomStation.",
+      "correctif": "phantom_compiler_game.py : arret force du groupe de programmes du jeu 6 s apres Quitter le jeu (TerminateJobObject) ; le groupe se ferme avec PhantomStation (KILL_ON_JOB_CLOSE).",
+      "controle": {
+        "fichier": "phantom_compiler_game.py",
+        "motifs": [
+          "TerminateJobObject"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-films-sofdec-start",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Films Sofdec impossibles a passer avec Start",
+      "symptome": "Les films ne se passent pas avec Start, sauf dans Grandia II (crochet ecrit pour ce seul disque). Verifie le 24/11 sur V-Rally 2 (Sofdec 1.21) : Start a 12 s termine le film et le jeu passe a la suite comme a la fin normale du film (vers 103 s). V-Rally 2 se bloque ensuite dans les deux cas : probleme distinct.",
+      "cause": "Le crochet de Grandia visait une adresse propre a son disque.",
+      "correctif": "sofdec_cinema.py retrouve mwSfdGetStat dans tout jeu Sofdec par son message d'erreur et enveloppe sa traduction : Start pendant un film = fin normale du film.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/sofdec_cinema.py",
+        "motifs": [
+          "mwSfdGetStat: handle is NULL"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-gdrom-version-lecteur",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Commande 40 du lecteur (version) sans reponse",
+      "symptome": "Journal : [BIOS] gdrom: unhandled command 40. Ce n'etait pas la cause de l'ecran noir de Re-Volt (voir dc-double-precision).",
+      "cause": "Le BIOS simule ne repondait pas a GDC_CMD_GETVER.",
+      "correctif": "dc_bios.c ecrit 'GDC Version 1.10 1999-03-31' a l'adresse donnee par le premier mot des parametres, seulement dans la memoire principale.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/pal-prototype/dc_bios.c",
+        "motifs": [
+          "GDC_CMD_GETVER"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": false
+    },
+    {
+      "id": "dc-double-precision",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Calcul en double precision traduit en simple : ecran noir, temps fige",
+      "symptome": "Re-Volt reste sur un ecran noir : le logo Acclaim est dessine mais recouvert par un fondu noir qui ne progresse jamais ; le jeu tourne a 60 images/s.",
+      "cause": "Les instructions flottantes ont le meme codage en simple et en double ; FPSCR.PR, change par le jeu lui-meme (lds ..., fpscr), choisit au moment de l'execution. Le traducteur produisait toujours du simple. La division entiere de GCC (__udivsi3_i4, faite en double) rendait 0 : Re-Volt calculait 781250/10 = 0, plafonnait chaque intervalle de temps a 0 et son intro ne progressait plus.",
+      "correctif": "static_recompile.py traduit FADD, FSUB, FMUL, FDIV, FCMP, FLOAT, FTRC, FNEG, FABS et FSQRT avec un test de FPSCR.PR a l'execution (SH4_PR, sh4_dr et sh4_set_dr dans recompiler/sh4_cpu.h) et ajoute FCNVSD/FCNVDS, qui etaient ignorees. Test : test_double_precision.py. Verifie sur Re-Volt : logos d'intro, ecran titre, course.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/tools/static_recompile.py",
+        "motifs": [
+          "SH4_PR(cpu)"
+        ]
+      },
+      "date": "2026-11-24",
+      "verifie": true
+    },
+    {
+      "id": "dc-tables-switch-octets",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Branches de switch jamais traduites (table d'octets lue doublee)",
+      "symptome": "Journal : [DISPATCH] unresolved call to 0x8C0473A0 (et autres) ; le jeu s'arrete a la premiere branche jamais vue, et l'apprentissage n'en rattrape qu'une par essai (Re-Volt).",
+      "cause": "GCC compile un switch en mova ; mov.b @(r0,Rm),Rn ; [extu.b] ; braf Rn, avec des ecarts d'un octet non doubles. _jump_table_targets doublait toujours les octets : les branches calculees tombaient a cote.",
+      "correctif": "static_recompile.py : _byte_jump_table_targets lit exactement cette forme (octet signe sauf extu.b, non double, table arretee a la premiere branche qui la suit) et ne fait qu'ajouter des cibles. _jump_table_targets est inchangee : 0 cible en plus ou en moins pour Crazy Taxi 2, Dead or Alive 2, Grandia II, House of the Dead 2, Soulcalibur, V-Rally 2 ; 55 branches en plus pour Re-Volt. Test : test_tables_switch.py. Verifie sur Re-Volt installe : 5 essais d'apprentissage, le dernier ne trouve plus rien ; 90 s avec Start : ecran titre, course, aucun appel non resolu.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/tools/static_recompile.py",
+        "motifs": [
+          "_byte_jump_table_targets"
+        ]
+      },
+      "date": "2026-11-25",
+      "verifie": true
+    },
+    {
+      "id": "dc-dsp-aica",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Sons forts durs, tout au centre, sans echo : processeur d'effets (DSP) de la puce son non imite",
+      "symptome": "Grandia II : le son sature quand les sons sont forts (cri de Ryudo quand Sky le lache apres l'intro) ; bruitages tous au centre, sans reverberation. Journal : AUDIO-DIAG dsp_seul eleve (voix sans sortie directe, DISDL=0). Apres sa mise en place, le joueur a entendu un son de selection 'glitch' : c'etait le bip de secours 0x4070 (course au demarrage du pilote), envoye aussi au DSP ; les vrais sons du menu n'y passent pas.",
+      "cause": "Grandia II envoie tous ses bruitages et ses cris au DSP seulement (DISDL=0, IMXL=15) sur 16 bus. Son programme (128 pas) place chaque bus a gauche, a droite ou au centre, en inverse trois en phase, et ajoute une reverberation. Le moteur rendait ces voix au centre, seches, au niveau d'envoi.",
+      "correctif": "aica_pcm.c imite le DSP pas a pas d'apres l'interpreteur de Flycast (dsp_interp.cpp) : MIXS (envoi des voix sur 20 bits), programme MPRO/COEF/MADRS, anneau en memoire son (RBP/RBL, format 16 bits ou un mot a 0 vaut +0,5), sorties EFREG avec EFSDL/EFPAN. Un jeu sans programme DSP garde l'ancien rendu ; PHANTOM_DC_DSP=0 le force. Grandia coupe lui-meme les sorties 0-7 pendant ses films (EFSDL=0). Tests : test_aica_dsp.py (niveau identique a la sortie directe, echo a 100 echantillons, format de l'anneau). Valide a l'oreille par le joueur le 2026-11-25 sur la scene du cri (avec dc-ftrc-sature et dc-pilote-son-course-banques).",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/src/hal/aica_pcm.c",
+        "motifs": [
+          "dsp_pas"
+        ]
+      },
+      "date": "2026-11-25",
+      "verifie": true
+    },
+    {
+      "id": "dc-adpcm-sature-donnees",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Rappel : un son ADPCM qui touche +-32767 est fidele au jeu, ne pas retirer la limite du decodeur",
+      "symptome": "AUDIO-DIAG adpcm_sature eleve (jusqu'a 4434 en 10 s sur Grandia II) ; envie de retirer ou d'elargir la limite 16 bits du decodeur ADPCM.",
+      "cause": "Mesure sur Grandia II (PHANTOM_DC_ADPCM_TRACE) : notre decodeur retrouve exactement l'etat d'un decodage propre. Avec la limite 16 bits, l'onde reste centree ; sans elle, elle derive pour de bon (jusqu'a +12542 de moyenne). L'encodeur du jeu tenait donc compte de la limite : les sommets plats sont dans les sons du disque (cri enregistre ecrete).",
+      "correctif": "Garder la limite dans adpcm() (aica_pcm.c). Chercher ailleurs : DSP, niveaux, placement.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/src/hal/aica_pcm.c",
+        "motifs": [
+          "v < -32768 ? -32768 : v > 32767 ? 32767 : v"
+        ]
+      },
+      "date": "2026-11-25",
+      "verifie": true
+    },
+    {
+      "id": "dc-pilote-son-course-banques",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Bruitages remplaces par des bips (bourdon, son de selection faux), au hasard des lancements",
+      "symptome": "Grandia II : selon le lancement, Start et le curseur du menu jouent un bip carre a 262 Hz (0x4070, 0x3FAC, cf. dc-grandia2-bourdon-aica) au lieu des vrais bruitages (ADPCM 0x019ABA, 0x018CF8). Journal [KYON] : sa=004070 / sa=003FAC. Memoire son : table des banques en 0x14080 a zero.",
+      "cause": "Course au demarrage du pilote son (ARM7). Le pilote commence par effacer sa zone de travail ; le SH-4 compile va bien plus vite que sur la console entre le lancement du pilote et l'ecriture de la table des banques (0x14080 : 0x18000, 0x28000...), alors que l'ARM7 avance au rythme de l'horloge reelle (2,8 M instr/s). Quand la table arrivait avant l'effacement (vu a 9101 instructions contre 15812 pour l'effacement), elle etait remise a zero : sans banques, chaque bruitage retombait sur le bip de secours du pilote. Le chronometrage change d'un lancement a l'autre (le calcul du DSP suffisait a basculer).",
+      "correctif": "dc_hardware.c : au lancement du pilote (fin de la remise a zero de l'ARM7), avance de 65536 instructions executees d'un coup (environ 23 ms de console ; PHANTOM_DC_ARM7_DEPART, 0 = aucune). Verifie en ralentissant le pilote 4 fois (DCRECOMP_ARM7_HZ=700000) : sans avance, bips de secours ; avec, vrais bruitages. House of the Dead 2 identique avec ou sans. Sonde d'atelier : PHANTOM_DC_AICA_WATCH=adresse (qui ecrit en memoire son : SH4 avec pc/pr, ARM7, G2-DMA).",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/src/hal/dc_hardware.c",
+        "motifs": [
+          "PHANTOM_DC_ARM7_DEPART"
+        ]
+      },
+      "date": "2026-11-25",
+      "verifie": true
+    },
+    {
+      "id": "dc-ftrc-sature",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Graillonnement / claquements sur les sons forts : FTRC traduit sans saturation",
+      "symptome": "Grandia II : ca gresille quand Sky lache Ryudo et qu'il crie (voix en flux, voie 50, anneau 0x1F3F40). Dans l'anneau : des echantillons a -32768 au milieu des cretes positives (..., 28439, -32768, 30966, ...), 103 sur 8192.",
+      "cause": "Le decodeur de voix (0x8C10D660) calcule en virgule flottante, convertit en 16.16 par FTRC et garde les 16 bits du haut. Sur le SH-4, FTRC sature : trop grand donne 0x7FFFFFFF, soit +32767. Le traducteur produisait une conversion C ordinaire, qui donne 0x80000000 sur PC pour toute valeur hors limites, meme positive : -32768, un claquement a pleine amplitude a chaque crete.",
+      "correctif": "static_recompile.py : FTRC FRm,FPUL passe par sh4_ftrc_s (recompiler/sh4_cpu.h), qui sature comme le SH-4 (la double precision le faisait deja, sh4_ftrc_d). Au passage, MAC.W et MAC.L respectent SR.S (saturation 32 et 48 bits, manuel SH-4 et MAME). Test : test_saturations_sh4.py. Trouve avec PHANTOM_DC_MIX_TRACE (voix qui debordent), PHANTOM_DC_AICA_RAM / PHANTOM_DC_RAM_A et PHANTOM_DC_WATCH_ZONE=debut:longueur:valeur (code qui ecrit -32768). Verifie sur le jeu installe : dans l'anneau de la voix, 0 echantillon a -32768 (103 avant), ecart median 693 (4803 avant) ; en sortie entre 276 et 282 s, 0 saut de plus de 12000 (676 avant), meme crete. Valide a l'oreille par le joueur le 2026-11-25 : « c'est regle ».",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/tools/static_recompile.py",
+        "motifs": [
+          "sh4_ftrc_s"
+        ]
+      },
+      "date": "2026-11-25",
       "verifie": true
     }
   ]

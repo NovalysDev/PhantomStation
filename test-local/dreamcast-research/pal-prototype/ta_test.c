@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 void dc_hw_raise_istnrm(int bit) { (void)bit; }
+/* pvr2_ta.c lit FPU_CULL_VAL ; 0 = seuil par défaut, ce qui ne change rien ici. */
+struct DCHardware *sh4_get_hardware(void) { return 0; }
+uint32_t dc_hw_read32(struct DCHardware *hw, uint32_t addr) { (void)hw; (void)addr; return 0; }
 static uint32_t bits(float f) { uint32_t u; memcpy(&u,&f,4); return u; }
 static void triangle(void) {
     for(int i=0;i<3;i++) {

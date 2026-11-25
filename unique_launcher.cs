@@ -323,6 +323,11 @@ class UniqueLauncher : Form {
         }
     }
     public static string PrepareSaveDirectory(string game) {
+        string debug = Environment.GetEnvironmentVariable("PHANTOM_DEBUG_SAVE_DIR");
+        if (!String.IsNullOrWhiteSpace(debug)) {
+            if (!Directory.Exists(debug)) throw new IOException("Le dossier des sauvegardes de débogage est introuvable.");
+            return Path.GetFullPath(debug);
+        }
         return PrepareSaveDirectory(game, Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
     }
     public static string PrepareSaveDirectory(string game, string documents) {

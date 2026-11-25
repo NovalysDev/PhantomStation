@@ -119,13 +119,32 @@ int sh4_fast_writes;
 static int g_legacy_guards;
 static void refresh_fast_writes(void) {
     sh4_fast_writes = !g_legacy_guards && !getenv("DCRECOMP_WATCH") && !getenv("DCRECOMP_WATCH2") &&
-                      !getenv("DCRECOMP_WATCHRANGE");
+                      !getenv("DCRECOMP_WATCHRANGE") && !getenv("PHANTOM_DC_WATCH_ZONE");
 }
 static uint32_t g_watch_addr = 0;
 static uint32_t g_watch_addr2 = 0;
 static int g_watch_init = 0;
 
 static void watch_check(uint32_t addr, uint32_t val) {
+    /* Atelier : PHANTOM_DC_WATCH_ZONE=debut:longueur:valeur note, avec la
+     * pile des fonctions traduites, chaque écriture de cette valeur (16 bits
+     * bas) dans la zone. Au plus 12. */
+    { static int zl = -2; static uint32_t zlo, zlen, zval; static int zn;
+      if (zl == -2) { const char *e = getenv("PHANTOM_DC_WATCH_ZONE"); zl = 0;
+          if (e) { char *f; zlo = (uint32_t)strtoul(e, &f, 0) & 0x1FFFFFFF;
+                   if (*f == ':') zlen = (uint32_t)strtoul(f + 1, &f, 0);
+                   if (*f == ':') zval = (uint32_t)strtoul(f + 1, &f, 0);
+                   zl = 1; } }
+      if (zl == 1 && zn < 12) { uint32_t a = addr & 0x1FFFFFFF;
+          if (a >= zlo && a < zlo + zlen && ((val & 0xFFFF) == (zval & 0xFFFF) || (val >> 16) == (zval & 0xFFFF))) {
+              zn++;
+              { const SH4CPU *c = g_cpu_ref;
+                printf("[ZONE] 0x%08X = 0x%08X pc=%08X pr=%08X sr=%08X macl=%08X mach=%08X", addr, val,
+                       c ? c->pc : 0, c ? c->pr : 0, c ? c->sr : 0, c ? c->macl : 0, c ? c->mach : 0);
+                if (c) for (int k = 0; k < 15; ++k) printf(" r%d=%08X", k, c->r[k]);
+                printf("\n"); }
+              sh4_dump_native_stack("zone");
+          } } }
     { static int rl = -2; static uint32_t lo, hi;
       if (rl == -2) { const char *e = getenv("DCRECOMP_WATCHRANGE");
           if (e) { lo = (uint32_t)strtoul(e, NULL, 0); hi = lo + 0x20; rl = 1; }
@@ -1385,6 +1404,7 @@ void sh4_write8(SH4CPU *cpu, uint32_t addr, uint8_t val) {
         return;
     }
     if (phys >= DC_AICA_BASE && phys < DC_AICA_BASE + DC_AICA_SIZE) {
+        if (dc_aica_surveille_actif) { char qui[64]; snprintf(qui, sizeof qui, "SH4 pc=%08X pr=%08X r3=%08X", cpu->pc, cpu->pr, cpu->r[3]); dc_aica_surveille(qui, phys - DC_AICA_BASE, 1, val); }
         cpu->aica_ram[phys - DC_AICA_BASE] = val;
         return;
     }
@@ -1426,6 +1446,7 @@ void sh4_write16(SH4CPU *cpu, uint32_t addr, uint16_t val) {
         return;
     }
     if (phys >= DC_AICA_BASE && phys < DC_AICA_BASE + DC_AICA_SIZE) {
+        if (dc_aica_surveille_actif) { char qui[64]; snprintf(qui, sizeof qui, "SH4 pc=%08X pr=%08X r3=%08X", cpu->pc, cpu->pr, cpu->r[3]); dc_aica_surveille(qui, phys - DC_AICA_BASE, 2, val); }
         *(uint16_t *)(cpu->aica_ram + (phys - DC_AICA_BASE)) = val;
         return;
     }
@@ -1587,6 +1608,7 @@ void sh4_write32(SH4CPU *cpu, uint32_t addr, uint32_t val) {
         return;
     }
     if (phys >= DC_AICA_BASE && phys < DC_AICA_BASE + DC_AICA_SIZE) {
+        if (dc_aica_surveille_actif) { char qui[64]; snprintf(qui, sizeof qui, "SH4 pc=%08X pr=%08X r3=%08X", cpu->pc, cpu->pr, cpu->r[3]); dc_aica_surveille(qui, phys - DC_AICA_BASE, 4, val); }
         *(uint32_t *)(cpu->aica_ram + (phys - DC_AICA_BASE)) = val;
         return;
     }

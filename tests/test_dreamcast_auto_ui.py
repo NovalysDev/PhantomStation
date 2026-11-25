@@ -25,6 +25,8 @@ class LearningUiTests(unittest.TestCase):
         view.trial_token, view.debug_active = 'token', False
         view.report_hotkey = view.after_id = view.previous_protocol = None
         view.overlay = view.job = view.pending_report = None
+        view.game_bar = view.game_bar_label = None
+        view.hidden = False
         view.root = Mock()
         view._trial_was_used = Mock(return_value=used)
         view._journal_stamp = Mock(return_value=2 if changed else 1)

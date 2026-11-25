@@ -17,6 +17,10 @@
 static uint32_t g_fake_regs[0x8000 / 4];
 uint32_t dc_aica_reg_read(uint32_t off) { return g_fake_regs[(off & 0x7FFF) / 4]; }
 void dc_aica_reg_write(uint32_t off, uint32_t val) { g_fake_regs[(off & 0x7FFF) / 4] = val; }
+uint8_t dc_aica_reg_read8(uint32_t off) { return (uint8_t)(dc_aica_reg_read(off & ~3u) >> ((off & 3) * 8)); }
+int dc_aica_access_width;
+int dc_aica_surveille_actif;
+void dc_aica_surveille(const char *q, uint32_t o, uint32_t l, uint32_t v) { (void)q; (void)o; (void)l; (void)v; }
 
 #include "../src/hal/arm7.c"
 

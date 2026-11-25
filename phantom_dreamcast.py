@@ -1,9 +1,154 @@
 from pathlib import Path
-import base64,hashlib,importlib.util,json,os,re,subprocess,tempfile,uuid,zipfile,argparse,sys
+import base64,hashlib,importlib.util,json,os,re,subprocess,tempfile,time,uuid,urllib.error,urllib.request,urllib.parse,zipfile,argparse,sys
 from phantom_nintendo import BASE,CSC,make_art
 from detection_doublons import SOURCE_ENTRY,encoded_source
 
 LAB=BASE/'test-local/dreamcast-research'
+
+# Codes de triche : cherchés à chaque compilation, puis gardés sur place pour
+# les suivantes. Le moteur lit « phantom-cheats.cht » à côté de son exécutable.
+CODES_DOSSIER=LAB/'cheats'
+CODES_URL='https://raw.githubusercontent.com/libretro/libretro-database/master/cht/Sega%20-%20Dreamcast/'
+CODES_INDEX_URL='https://api.github.com/repos/libretro/libretro-database/contents/cht/Sega%20-%20Dreamcast'
+CODES_INDEX=CODES_DOSSIER/'index-libretro-dreamcast.json'
+CODES_REGIONS=frozenset(('europe','usa','japan','france','germany','spain','italy','pal','ntsc','en','fr','de','es','it','ja','jp','uk','australia'))
+CODES_MOTS_VIDES=frozenset(('the','of','and','les','le','la','jeu','game','expert','edition','special','championship','championnat','version','tome'))
+CODES_PREFERENCE=('europe','usa','japan')
+# Jeux dont la version Dreamcast porte un autre nom en Amérique : la base
+# libretro les classe sous ce nom-là, donc on l'essaie aussi.
+CODES_AUTRES_NOMS={'v rally 2':'Test Drive V-Rally'}
+# Disques déjà fournis avec leurs codes dans le projet, si la recherche par nom échoue.
+CODES_CONNUS={'0cb24122c167a4f199a8aa4408dad4eeb604a0f3':'grandia_ii_europe.cht'}
+
+def codes_normalise(texte):
+    texte=texte.lower().replace('&',' and ')
+    texte=re.sub(r'\([^)]*\)',' ',texte)
+    texte=re.sub(r'[^a-z0-9]+',' ',texte)
+    return re.sub(r'\s+',' ',texte).strip()
+
+def codes_meme_jeu(nom_fichier,titre):
+    """Vrai si le nom du .cht désigne ce jeu, à la région ou aux langues près."""
+    a=codes_normalise(nom_fichier).split(); b=codes_normalise(titre).split()
+    if not a or not b: return False
+    court,long=(a,b) if len(a)<=len(b) else (b,a)
+    if long[:len(court)]!=court: return False
+    return all(mot in CODES_REGIONS for mot in long[len(court):])
+
+def codes_mots(texte):
+    """Mots significatifs d'un titre (les mentions de région et de version ne
+    doivent pas décider du choix du fichier)."""
+    return [mot for mot in codes_normalise(texte).split() if mot not in CODES_MOTS_VIDES]
+
+def codes_index(log=print):
+    """Liste des .cht Dreamcast de libretro-database, gardée un mois sur place."""
+    noms=None
+    if CODES_INDEX.is_file():
+        try: noms=json.loads(CODES_INDEX.read_text(encoding='utf-8'))
+        except (OSError,ValueError): noms=None
+        if noms and time.time()-CODES_INDEX.stat().st_mtime<30*86400: return noms
+    try:
+        with urllib.request.urlopen(CODES_INDEX_URL,timeout=10) as reponse:
+            entrees=json.loads(reponse.read().decode('utf-8'))
+        recus=sorted(str(e.get('name','')) for e in entrees if str(e.get('name','')).endswith('.cht'))
+        if recus:
+            CODES_DOSSIER.mkdir(parents=True,exist_ok=True)
+            CODES_INDEX.write_text(json.dumps(recus,ensure_ascii=False),encoding='utf-8')
+            return recus
+    except (urllib.error.URLError,OSError,ValueError) as erreur:
+        if noms: return noms
+        log('Recherche des codes hors ligne ('+str(getattr(erreur,'reason',erreur))+') : compilation sans codes.')
+    return noms
+
+def codes_region(texte):
+    """Région indiquée entre parenthèses, par exemple (Europe) ou (USA)."""
+    for region in re.findall(r'\(([^)]*)\)',texte.lower()):
+        for mot in ('europe','usa','japan','france','germany','spain','italy'):
+            if mot in region: return mot
+    return None
+
+def codes_region_normalise(region):
+    """France, Allemagne, Espagne et Italie font partie de la version européenne."""
+    return 'europe' if region in ('france','germany','spain','italy') else region
+
+def codes_region_accepte(nom,region):
+    """Un fichier sans région convient ; sinon il doit viser la même version."""
+    autre=codes_region_normalise(codes_region(nom))
+    return autre is None or autre==codes_region_normalise(region)
+
+def codes_local(titre):
+    """Fichier de codes déjà présent dans le projet (cache des compilations)."""
+    if not CODES_DOSSIER.is_dir(): return None
+    region=codes_region_normalise(codes_region(titre) or 'europe')
+    for fichier in sorted(CODES_DOSSIER.glob('*.cht')):
+        if codes_meme_jeu(fichier.stem,titre) and codes_region_accepte(fichier.stem,region): return fichier
+    return None
+
+def codes_fichier(nom,log=print):
+    """Télécharge un .cht précis et le garde pour les compilations suivantes."""
+    if not nom or Path(nom).name!=nom or not nom.endswith('.cht'): return None
+    cible=CODES_DOSSIER/nom
+    if cible.is_file(): return cible
+    try:
+        with urllib.request.urlopen(CODES_URL+urllib.parse.quote(nom),timeout=10) as reponse:
+            texte=reponse.read()
+    except (urllib.error.URLError,OSError) as erreur:
+        log('Téléchargement des codes impossible ('+str(getattr(erreur,'reason',erreur))+') : compilation sans codes.')
+        return None
+    if b'cheat0_' not in texte: return None
+    CODES_DOSSIER.mkdir(parents=True,exist_ok=True)
+    cible.write_bytes(texte)
+    return cible
+
+def codes_libretro(titre,log=print,region=None):
+    """Cherche le .cht du jeu dans la liste de libretro-database."""
+    noms=codes_index(log)
+    if not noms: return None
+    region=codes_region_normalise(region or codes_region(titre) or 'europe')
+    trouves=[nom for nom in noms if codes_meme_jeu(nom[:-4],titre)]
+    acceptes=[nom for nom in trouves if codes_region_accepte(nom[:-4],region)]
+    if acceptes:
+        acceptes.sort(key=lambda nom:(0 if codes_region_normalise(codes_region(nom))==region else 1,nom))
+        return codes_fichier(acceptes[0],log)
+    voulu=codes_mots(titre)
+    if voulu:
+        chiffres=[mot for mot in voulu if mot.isdigit()]
+        scores=[]
+        for nom in noms:
+            if not codes_region_accepte(nom[:-4],region): continue
+            mots=codes_mots(nom[:-4])
+            if not mots or [mot for mot in mots if mot.isdigit()]!=chiffres: continue
+            scores.append((len(set(voulu)&set(mots))/len(set(voulu)),nom))
+        scores.sort(reverse=True)
+        if scores and scores[0][0]>=0.75 and (len(scores)==1 or scores[0][0]>scores[1][0]):
+            return codes_fichier(scores[0][1],log)
+    if trouves:
+        autres='/'.join(sorted({codes_region_normalise(codes_region(nom[:-4])) or 'sans region' for nom in trouves}))
+        log('Codes trouvés seulement en version '+autres+' : ignorés pour cette version '+region+'.')
+    return None
+
+def codes_autres_noms(titre):
+    """Autres noms connus du même jeu (versions américaines)."""
+    autre=CODES_AUTRES_NOMS.get(' '.join(codes_mots(titre)))
+    return [autre] if autre else []
+
+def chercher_codes(titre,demarrage=None,log=print):
+    """Codes du jeu : dossier cheats du projet, puis libretro-database.
+    Le fichier trouvé est joint à la compilation et gardé pour les suivantes.
+    Ne bloque jamais une compilation : hors ligne, elle continue sans codes."""
+    fichier=codes_local(titre)
+    if fichier: return fichier
+    fichier=codes_libretro(titre,log)
+    if fichier: return fichier
+    region=codes_region(titre)
+    for autre in codes_autres_noms(titre):
+        fichier=codes_libretro(autre,log,region)
+        if fichier: return fichier
+    if demarrage is not None:
+        try: empreinte=hashlib.sha1(Path(demarrage).read_bytes()).hexdigest()
+        except OSError: empreinte=''
+        connu=CODES_CONNUS.get(empreinte)
+        if connu and (CODES_DOSSIER/connu).is_file(): return CODES_DOSSIER/connu
+    return None
 
 def build_stub(icon,output,work,background=None,generic=False,house=False):
     source=(BASE/'unique_launcher.cs').read_text(encoding='utf-8-sig')
@@ -35,7 +180,8 @@ def build(image,name,output,icon=None,background=None,log=print,package_id=None)
             spec=importlib.util.spec_from_file_location('phantom_dc_builder',LAB/'build_pal_prototype.py')
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
             native=module.build(image,work/'native',log=log)
-            profile=json.loads((native/'prototype.json').read_text(encoding='utf-8'))['profil']
+            prototype=json.loads((native/'prototype.json').read_text(encoding='utf-8'))
+            profile=prototype['profil']
             generic=profile!='crazy_taxi_pal'
             log('Recherche de la jaquette et création du lanceur…')
             make_art('DC',image,name,icon,work,log)
@@ -46,11 +192,26 @@ def build(image,name,output,icon=None,background=None,log=print,package_id=None)
             manifest=game_id+'\ndreamcast.exe\n'+digest+'\n'+base64.b64encode(name.encode()).decode()+'\ndocuments-saves-v1\n'
             config='[game]\nname = '+json.dumps(name,ensure_ascii=False)+'\nplatform = "DC"\nprofile = '+json.dumps(profile)+'\n'
             files=[(runtime,'dreamcast.exe'),(native/'1ST_READ.BIN','1ST_READ.BIN'),(image,'disque.chd'),(native/'SDL2.dll','SDL2.dll'),(native/'libchdr.dll','libchdr.dll'),(work/'boxart.png','assets/img/boxart.png'),(work/'boxart.tga','assets/img/boxart.tga'),(LAB/'dcrecomp/LICENSE','licences/dcrecomp-LICENSE.txt'),(LAB/'glew-2.2.0/LICENSE.txt','licences/glew-LICENSE.txt'),(LAB/'libchdr-6cde5348eb118da3baf94f75a69577a005a484fd/LICENSE.txt','licences/libchdr-LICENSE.txt'),(BASE/'n64-engine/generique/SDL2/LICENSE.txt','licences/SDL2-LICENSE.txt')]
+            codes=chercher_codes(name,native/'1ST_READ.BIN',log=log)
+            if codes is not None:
+                files.append((codes,'phantom-cheats.cht'))
+                log('Codes de triche inclus : '+codes.name)
+            else:
+                log('Aucun fichier de codes trouvé pour ce jeu : le menu F11 restera vide.')
+            # L'apprentissage du disque et l'empreinte du moteur voyagent avec le
+            # jeu : un autre PC ou une recompilation repart de ce qui a été
+            # appris, et un jeu au moteur ancien est mis à jour après une partie.
+            import apprentissage
+            appris=apprentissage.fichiers_a_ranger(prototype.get('sha1_demarrage',''))
+            files+=appris
+            if appris: log(f'Apprentissage rangé dans le jeu : {len(appris)-1} bloc(s) de code.')
             log('Création et vérification du fichier unique…')
             with zipfile.ZipFile(partial,'a',allowZip64=True) as archive:
                 archive.writestr('phantom-package.txt',manifest.encode())
                 archive.writestr('game.toml',config.encode())
                 archive.writestr(SOURCE_ENTRY,encoded_source('DC',[[image]]))
+                archive.writestr('moteur.txt',str(prototype.get('moteur','')).encode('ascii'))
+                if appris: archive.writestr('apprentissage/disque.txt',prototype['sha1_demarrage'].encode('ascii'))
                 for path,arcname in files:
                     archive.write(path,arcname,compress_type=zipfile.ZIP_STORED if path==image else zipfile.ZIP_DEFLATED)
             with zipfile.ZipFile(partial) as archive:

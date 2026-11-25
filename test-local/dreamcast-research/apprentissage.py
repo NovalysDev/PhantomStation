@@ -232,6 +232,160 @@ def block_pointers(blocks: list[dict], boot: bytes) -> set[int]:
     return found
 
 
+# Programmes voisins rangés dans une archive AFS du disque (voir programmes_voisins).
+_SECTEUR = 2048
+_DEBUT_HD = 45000
+AFS_MAX_ENTREES = 64
+AFS_MAX_OCTETS = 4 * 1024 * 1024
+
+
+def _lire(disc, lba: int, secteurs: int) -> bytes:
+    return b''.join(disc.sector(lba + i) for i in range(secteurs))
+
+
+def _fichiers_iso(disc) -> list[tuple[str, int, int]]:
+    """(chemin, premier secteur, octets) de chaque fichier de la zone haute densité."""
+    pvd = disc.sector(_DEBUT_HD + 16)
+    if pvd[0] != 1 or pvd[1:6] != b'CD001': return []
+    fichiers, vus = [], set()
+    def parcourir(lba, taille, chemin, profondeur):
+        if profondeur > 8 or lba in vus or not 0 < taille <= 8 << 20: return
+        vus.add(lba)
+        d = _lire(disc, lba, (taille + _SECTEUR - 1) // _SECTEUR)[:taille]
+        pos = 0
+        while pos < len(d):
+            n = d[pos]
+            if not n:
+                pos = (pos // _SECTEUR + 1) * _SECTEUR
+                continue
+            if n < 34 or pos + n > len(d) or 33 + d[pos + 32] > n: return
+            r = d[pos:pos + n]
+            nom = r[33:33 + r[32]]
+            debut, octets = int.from_bytes(r[2:6], 'little'), int.from_bytes(r[10:14], 'little')
+            if nom not in (b'\0', b'\1'):
+                texte = nom.decode('ascii', 'replace').split(';')[0]
+                if r[25] & 2: parcourir(debut, octets, chemin + texte + '/', profondeur + 1)
+                else: fichiers.append((chemin + texte, debut, octets))
+            pos += n
+    racine = pvd[156:190]
+    parcourir(int.from_bytes(racine[2:6], 'little'), int.from_bytes(racine[10:14], 'little'), '/', 0)
+    return fichiers
+
+
+def _entrees_afs(disc, debut: int, taille: int) -> list[tuple[int, int] | None]:
+    """Entrées (premier secteur, octets) d'une archive AFS ; [] si ce n'en est pas une."""
+    if taille < 16: return []
+    tete = disc.sector(debut)
+    if tete[:4] != b'AFS\0': return []
+    n = int.from_bytes(tete[4:8], 'little')
+    if not 0 < n <= 65536 or 8 + 8 * n > taille: return []
+    table = _lire(disc, debut, (8 + 8 * n + _SECTEUR - 1) // _SECTEUR)
+    entrees = []
+    for i in range(n):
+        off = int.from_bytes(table[8 + 8 * i:12 + 8 * i], 'little')
+        octets = int.from_bytes(table[12 + 8 * i:16 + 8 * i], 'little')
+        # Le jeu lit des secteurs entiers : seule une entrée qui commence sur un
+        # secteur arrive en mémoire telle qu'on peut la relire ici.
+        ok = octets and not off % _SECTEUR and off + octets <= taille
+        entrees.append((debut + off // _SECTEUR, octets) if ok else None)
+    return entrees
+
+
+def programmes_voisins(blocks: list[dict], disc) -> list[dict]:
+    """Programmes rangés dans la même archive AFS qu'un programme déjà appris.
+
+    Beaucoup de jeux Dreamcast rangent leurs programmes interchangeables (un
+    par boss, par niveau...) dans une archive AFS et les chargent tous à la
+    même adresse. Une partie n'en charge qu'un à la fois : appris un par un,
+    ils restaient non traduits tant qu'on ne les avait pas atteints en jouant,
+    et ce qui avait été appris restait sur le PC où l'on avait joué. House of
+    the Dead 2 range ainsi ses six boss dans BOSS.AFS, tous chargés en
+    0x8C4ACA20 : sur un nouveau PC, les boss non encore atteints ne
+    marchaient plus. Quand un bloc appris, qui commence à son point d'entrée,
+    est exactement une entrée d'une archive, chacune de ses voisines qui
+    commence comme une fonction est ajoutée à la même adresse, avec le même
+    point d'entrée. Les octets sont ceux que le jeu mettra en mémoire (secteurs
+    entiers) : à l'exécution, la signature en RAM choisit le bon programme.
+    """
+    candidats = [b for b in blocks if b.get('disc') and b['base'] in b['targets']
+                 and b['data'] and not len(b['data']) % _SECTEUR]
+    if not candidats: return []
+    archives = []
+    for _, debut, taille in _fichiers_iso(disc):
+        entrees = _entrees_afs(disc, debut, taille)
+        if entrees: archives.append(entrees)
+    connus = {b['file'] for b in blocks}
+    nouveaux = []
+    for b in candidats:
+        secteurs = len(b['data']) // _SECTEUR
+        for entrees in archives:
+            if not any(e and (e[1] + _SECTEUR - 1) // _SECTEUR == secteurs and
+                       disc.sector(e[0]) == b['data'][:_SECTEUR] and _lire(disc, e[0], secteurs) == b['data']
+                       for e in entrees):
+                continue
+            valides = [e for e in entrees if e and e[1] <= AFS_MAX_OCTETS]
+            if len(valides) > AFS_MAX_ENTREES: break
+            for lba, octets in valides:
+                data = _lire(disc, lba, (octets + _SECTEUR - 1) // _SECTEUR)
+                if not plausible_entry(data, 0, False): continue
+                nom = f"bloc-{hashlib.sha1(b['base'].to_bytes(4, 'little') + data).hexdigest()[:12]}.bin"
+                if nom in connus: continue
+                connus.add(nom)
+                nouveaux.append({'base': b['base'], 'data': data, 'file': nom, 'targets': {b['base']}, 'disc': True})
+            break
+    return nouveaux
+
+
+def _prologue(data: bytes, off: int) -> bool:
+    """Une vraie entrée de fonction SH-4 : dans ses quatre premières
+    instructions, un registre ou PR poussé sur la pile, ou la pile agrandie.
+    Plus strict que plausible_entry : une fin de fonction (LDS.L @R15+,PR ;
+    RTS) n'en est pas une."""
+    ops = [int.from_bytes(data[off + i:off + i + 2], 'little') for i in range(0, 8, 2) if 0 <= off and off + i + 2 <= len(data)]
+    return len(ops) == 4 and any((o & 0xFF0F) == 0x2F06 or o == 0x4F22 or (o & 0xFF80) == 0x7F80 for o in ops)
+
+
+def pointeurs_entre_programmes(blocks: list[dict]) -> dict[str, set[int]]:
+    """Fonctions d'un programme du disque que les autres programmes désignent.
+
+    Un programme chargé à part (un boss) rappelle le programme du jeu chargé
+    en même temps par des adresses rangées dans ses données. Aucune n'est
+    visible depuis le programme du jeu lui-même : chacune n'était traduite
+    qu'après une partie où on l'avait atteinte. House of the Dead 2 : les six
+    boss (0x8C4ACA20) désignent 0x8C42FE58, 0x8C43A564... du programme de jeu
+    (0x8C42E800) ; sans 0x8C43A564, le boss démarrait sans viseur ni tirs.
+
+    Un mot d'un programme qui tombe dans un autre programme (hors de sa propre
+    zone, et pas dans un programme chargé à la même adresse, qui le remplace)
+    y devient une entrée seulement si c'est un vrai début de fonction : après
+    la fin d'une autre ou en tête de code, et commençant par une sauvegarde de
+    registres. Une adresse au milieu d'une fonction la couperait en deux.
+    Renvoie {fichier du bloc désigné: entrées}."""
+    programmes = [b for b in blocks if b.get('disc') and b['data']]
+    debuts = {}
+    trouves: dict[str, set[int]] = {}
+    for a in programmes:
+        a_lo = a['base'] & 0x1FFFFFFF
+        a_hi = a_lo + len(a['data'])
+        mots = set()
+        for i in range(0, len(a['data']) - 3, 4):
+            brut = int.from_bytes(a['data'][i:i + 4], 'little')
+            m = brut & 0x1FFFFFFF
+            if brut >> 29 in (0, 4, 5) and not m & 1 and not a_lo <= m < a_hi:
+                mots.add(m)
+        for b in programmes:
+            if b is a or b['base'] == a['base']: continue
+            lo = b['base'] & 0x1FFFFFFF
+            dedans = [m for m in mots if lo <= m < lo + len(b['data'])]
+            if not dedans: continue
+            if b['file'] not in debuts: debuts[b['file']] = _function_start(b['data'])
+            good = debuts[b['file']]
+            for m in dedans:
+                if good(m - lo) and _prologue(b['data'], m - lo):
+                    trouves.setdefault(b['file'], set()).add(m | 0x80000000)
+    return trouves
+
+
 def cache_root(boot_sha1: str) -> Path:
     local = os.environ.get('LOCALAPPDATA') or tempfile.gettempdir()
     return Path(local) / 'PhantomStation' / 'Dreamcast-apprentissage' / boot_sha1
@@ -271,6 +425,23 @@ class Learned:
         tmp.write_text(json.dumps({'principal': [f'0x{t:08X}' for t in sorted(self.main)], 'blocs': blocks},
                                   indent=1) + '\n', encoding='utf-8')
         os.replace(tmp, self.root / 'profil.json')
+
+    def add_archive_siblings(self, disc) -> int:
+        """Ajoute les programmes voisins des blocs appris ; renvoie leur nombre."""
+        nouveaux = programmes_voisins(self.blocks, disc)
+        self.blocks.extend(nouveaux)
+        return len(nouveaux)
+
+    def add_cross_pointers(self) -> int:
+        """Ajoute les fonctions qu'un programme désigne dans un autre ; renvoie
+        le nombre de nouvelles entrées."""
+        nouveau = 0
+        trouves = pointeurs_entre_programmes(self.blocks)
+        for b in self.blocks:
+            for t in sorted(trouves.get(b['file'], ())):
+                if t not in b['targets'] and len(b['targets']) < MAX_BLOCK_TARGETS:
+                    b['targets'].add(t); nouveau += 1
+        return nouveau
 
     def merge_sessions(self, boot_end: int) -> int:
         """Take in what the game met during normal play (see the launcher)."""
@@ -321,6 +492,57 @@ class Learned:
                 if t not in owner['targets'] and len(owner['targets']) < MAX_BLOCK_TARGETS:
                     owner['targets'].add(t); new += 1
         return new
+
+
+def fichiers_a_ranger(boot_sha1: str) -> list[tuple[Path, str]]:
+    """Fichiers de l'apprentissage de ce disque à ranger dans le jeu compilé,
+    sous apprentissage/ : l'apprentissage voyage alors avec le jeu (copie sur
+    un autre PC, recompilation), au lieu de rester dans %LOCALAPPDATA%."""
+    racine = cache_root(boot_sha1)
+    profil = racine / 'profil.json'
+    if not profil.is_file(): return []
+    try: blocs = json.loads(profil.read_text(encoding='utf-8')).get('blocs', [])
+    except ValueError: return []
+    fichiers = [(profil, 'apprentissage/profil.json')]
+    for b in blocs:
+        nom = str(b.get('fichier', ''))
+        if re.fullmatch(r'bloc-[0-9a-f]{12}\.bin', nom) and (racine / nom).is_file():
+            fichiers.append((racine / nom, 'apprentissage/' + nom))
+    return fichiers
+
+
+def fusionner_paquet(learned: 'Learned', paquet: Path, boot_sha1: str) -> int:
+    """Ajoute à learned l'apprentissage rangé dans un jeu compilé de ce disque.
+    Rien n'est retiré : les entrées déjà connues restent. Renvoie le nombre
+    d'entrées nouvelles."""
+    import zipfile
+    with zipfile.ZipFile(paquet) as z:
+        try:
+            if z.read('apprentissage/disque.txt').decode('ascii').strip() != boot_sha1: return 0
+            data = json.loads(z.read('apprentissage/profil.json').decode('utf-8'))
+        except (KeyError, ValueError, UnicodeError):
+            return 0
+        nouveau = 0
+        for t in data.get('principal', []):
+            v = int(t, 16)
+            if v not in learned.main: learned.main.add(v); nouveau += 1
+        for b in data.get('blocs', []):
+            nom = str(b.get('fichier', ''))
+            if not re.fullmatch(r'bloc-[0-9a-f]{12}\.bin', nom): continue
+            cibles = {int(x, 16) for x in b.get('cibles', [])}
+            existant = next((x for x in learned.blocks if x['file'] == nom), None)
+            if existant is None:
+                try: octets = z.read('apprentissage/' + nom)
+                except KeyError: continue
+                base = int(b['base'], 16)
+                if nom != f"bloc-{hashlib.sha1(base.to_bytes(4, 'little') + octets).hexdigest()[:12]}.bin": continue
+                learned.blocks.append({'base': base, 'data': octets, 'file': nom,
+                                       'targets': cibles, 'disc': b.get('source') != 'fenetre'})
+                nouveau += len(cibles)
+            else:
+                plus = cibles - existant['targets']
+                existant['targets'] |= plus; nouveau += len(plus)
+    return nouveau
 
 
 def _key(block: dict) -> str:

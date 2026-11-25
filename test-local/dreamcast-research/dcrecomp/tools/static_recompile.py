@@ -163,6 +163,7 @@ class SH4Recompiler:
         self.entry_hints = (self._mova_targets()
                             | self._external_branch_targets()
                             | self._jump_table_targets()
+                            | self._byte_jump_table_targets()
                             | self._inline_branch_table_targets())
 
         self._register_boundary_continuations()
@@ -293,6 +294,11 @@ class SH4Recompiler:
         table has no length marker; it is followed immediately by code, so read
         entries while they still land on an even address a sane distance ahead
         and stop at the first one that does not.
+
+        Laissée telle quelle : les jeux qui marchent ont été traduits avec. Ses
+        défauts (tables d'octets toujours doublées, lecture qui déborde sur le
+        code qui suit) sont compensés par _byte_jump_table_targets, qui ne fait
+        qu'ajouter des cibles.
         """
         WINDOW = 0x4000          # switch arms live close to the branch
         MAX_ENTRIES = 256
@@ -337,6 +343,67 @@ class SH4Recompiler:
                 if not (self.base <= target < self.base + self.size):
                     break
                 targets.add(target)
+        return targets
+
+    def _byte_jump_table_targets(self):
+        """Arms of a `switch` whose table holds bytes that are not doubled.
+
+            mova   @(disp,PC), r0      ; r0 = table
+            mov.b  @(r0,r2), r1        ; r1 = table[index]
+            extu.b r1, r1              ; (absent : octet signé)
+            braf   r1                  ; PC = braf + 4 + r1
+
+        _jump_table_targets double every byte entry, which is right only when
+        an `add Rn,Rn` or `shll Rn` follows the load. Re-Volt has 29 such
+        tables, none doubled: its `switch` arms were never translated and each
+        one reached in play stopped the game (« unresolved call »), learned one
+        per run. Only this exact shape is read - a real braf, the load right
+        after the mova - and the table ends where the first arm after it
+        begins, so the code that follows is never read as displacements.
+        """
+        WINDOW = 0x4000
+        targets = set()
+        for offset in range(0, self.size - 1, 2):
+            opcode = self.read_u16(offset)
+            if (opcode & 0xF0FF) != 0x0023:                 # braf seulement
+                continue
+            reg = (opcode >> 8) & 0xF
+            # Entre la mova et le braf : le chargement d'octet, puis au plus un
+            # extu.b. Un add ou un shll (déplacement doublé) laisse la table à
+            # _jump_table_targets, qui la lit déjà juste.
+            back, unsigned = 2, False
+            prev = self.read_u16(offset - back) if offset >= back else 0
+            if (prev & 0xF00F) == 0x600C and ((prev >> 8) & 0xF) == reg:
+                unsigned = True
+                back += 2
+                prev = self.read_u16(offset - back) if offset >= back else 0
+            if not ((prev & 0xF00F) == 0x000C and ((prev >> 8) & 0xF) == reg):
+                continue
+            back += 2
+            mova = self.read_u16(offset - back) if offset >= back else 0
+            if (mova & 0xFF00) != 0xC700:
+                continue
+            pc = self.offset_to_addr(offset - back)
+            table = ((pc + 4) & 0xFFFFFFFC) + (mova & 0xFF) * 4
+            base = self.offset_to_addr(offset) + 4
+            table_off = self.addr_to_offset(table)
+            table_end = None
+            for i in range(256):
+                if table_off + i >= self.size:
+                    break
+                if table_end is not None and table + i >= table_end:
+                    break
+                disp = self.data[table_off + i]
+                if not unsigned and disp & 0x80:
+                    disp -= 0x100
+                target = base + disp
+                if (target & 1) or not (base - WINDOW <= target < base + WINDOW):
+                    break
+                if not (self.base <= target < self.base + self.size):
+                    break
+                targets.add(target)
+                if target > table and (table_end is None or target < table_end):
+                    table_end = target
         return targets
 
     def _inline_branch_table_targets(self):
@@ -1030,30 +1097,55 @@ class SH4Recompiler:
         if (opcode & 0xF00F) == 0xF007:  # FMOV.S FRm, @(R0,Rn)
             return f"sh4_fmov_store(cpu, {m}, cpu->r[0] + cpu->r[{n}]);", False, None, False
 
-        if (opcode & 0xF00F) == 0xF000:  # FADD
-            return f"cpu->fr[{n}] += cpu->fr[{m}];", False, None, False
-        if (opcode & 0xF00F) == 0xF001:  # FSUB
-            return f"cpu->fr[{n}] -= cpu->fr[{m}];", False, None, False
-        if (opcode & 0xF00F) == 0xF002:  # FMUL
-            return f"cpu->fr[{n}] *= cpu->fr[{m}];", False, None, False
-        if (opcode & 0xF00F) == 0xF003:  # FDIV
-            return f"cpu->fr[{n}] /= cpu->fr[{m}];", False, None, False
-        if (opcode & 0xF00F) == 0xF004:  # FCMP/EQ
-            return f"sh4_set_t(cpu, cpu->fr[{n}] == cpu->fr[{m}]);", False, None, False
-        if (opcode & 0xF00F) == 0xF005:  # FCMP/GT
-            return f"sh4_set_t(cpu, cpu->fr[{n}] > cpu->fr[{m}]);", False, None, False
+        # Même codage en simple et en double : FPSCR.PR, lu à l'exécution,
+        # choisit (voir sh4_dr dans recompiler/sh4_cpu.h). En double, les
+        # registres sont les paires DRn = FR(n & 14) : FR(n | 1).
+        dn, dm = n & 14, m & 14
 
-        if (opcode & 0xF0FF) == 0xF02D:  # FLOAT FPUL, FRn
-            return (f"{{ union {{ uint32_t u; float f; }} conv; conv.u = cpu->fpul;\n"
-                    f"    cpu->fr[{n}] = (float)(int32_t)cpu->fpul; }}"), False, None, False
-        if (opcode & 0xF0FF) == 0xF03D:  # FTRC FRm, FPUL
-            return f"cpu->fpul = (uint32_t)(int32_t)cpu->fr[{n}]; /* ftrc */", False, None, False
+        def selon_pr(simple, double):
+            return f"if (SH4_PR(cpu)) {{ {double} }} else {{ {simple} }}"
+
+        if (opcode & 0xF00F) == 0xF000:  # FADD
+            return selon_pr(f"cpu->fr[{n}] += cpu->fr[{m}];",
+                            f"sh4_set_dr(cpu, {dn}, sh4_dr(cpu, {dn}) + sh4_dr(cpu, {dm}));"), False, None, False
+        if (opcode & 0xF00F) == 0xF001:  # FSUB
+            return selon_pr(f"cpu->fr[{n}] -= cpu->fr[{m}];",
+                            f"sh4_set_dr(cpu, {dn}, sh4_dr(cpu, {dn}) - sh4_dr(cpu, {dm}));"), False, None, False
+        if (opcode & 0xF00F) == 0xF002:  # FMUL
+            return selon_pr(f"cpu->fr[{n}] *= cpu->fr[{m}];",
+                            f"sh4_set_dr(cpu, {dn}, sh4_dr(cpu, {dn}) * sh4_dr(cpu, {dm}));"), False, None, False
+        if (opcode & 0xF00F) == 0xF003:  # FDIV
+            return selon_pr(f"cpu->fr[{n}] /= cpu->fr[{m}];",
+                            f"sh4_set_dr(cpu, {dn}, sh4_dr(cpu, {dn}) / sh4_dr(cpu, {dm}));"), False, None, False
+        if (opcode & 0xF00F) == 0xF004:  # FCMP/EQ
+            return selon_pr(f"sh4_set_t(cpu, cpu->fr[{n}] == cpu->fr[{m}]);",
+                            f"sh4_set_t(cpu, sh4_dr(cpu, {dn}) == sh4_dr(cpu, {dm}));"), False, None, False
+        if (opcode & 0xF00F) == 0xF005:  # FCMP/GT
+            return selon_pr(f"sh4_set_t(cpu, cpu->fr[{n}] > cpu->fr[{m}]);",
+                            f"sh4_set_t(cpu, sh4_dr(cpu, {dn}) > sh4_dr(cpu, {dm}));"), False, None, False
+
+        if (opcode & 0xF0FF) == 0xF02D:  # FLOAT FPUL, FRn / DRn
+            return selon_pr(f"cpu->fr[{n}] = (float)(int32_t)cpu->fpul;",
+                            f"sh4_set_dr(cpu, {dn}, (double)(int32_t)cpu->fpul);"), False, None, False
+        if (opcode & 0xF0FF) == 0xF03D:  # FTRC FRm / DRm, FPUL
+            return selon_pr(f"cpu->fpul = sh4_ftrc_s(cpu->fr[{n}]);",
+                            f"cpu->fpul = sh4_ftrc_d(sh4_dr(cpu, {dn}));") + " /* ftrc */", False, None, False
         if (opcode & 0xF0FF) == 0xF04D:  # FNEG
-            return f"cpu->fr[{n}] = -cpu->fr[{n}];", False, None, False
+            return selon_pr(f"cpu->fr[{n}] = -cpu->fr[{n}];",
+                            f"sh4_set_dr(cpu, {dn}, -sh4_dr(cpu, {dn}));"), False, None, False
         if (opcode & 0xF0FF) == 0xF05D:  # FABS
-            return f"cpu->fr[{n}] = fabsf(cpu->fr[{n}]);", False, None, False
+            return selon_pr(f"cpu->fr[{n}] = fabsf(cpu->fr[{n}]);",
+                            f"sh4_set_dr(cpu, {dn}, fabs(sh4_dr(cpu, {dn})));"), False, None, False
         if (opcode & 0xF0FF) == 0xF06D:  # FSQRT
-            return f"cpu->fr[{n}] = sqrtf(cpu->fr[{n}]);", False, None, False
+            return selon_pr(f"cpu->fr[{n}] = sqrtf(cpu->fr[{n}]);",
+                            f"sh4_set_dr(cpu, {dn}, sqrt(sh4_dr(cpu, {dn})));"), False, None, False
+        # FCNVSD FPUL, DRn et FCNVDS DRm, FPUL n'existent qu'en double.
+        if (opcode & 0xF1FF) == 0xF0AD:  # FCNVSD
+            return (f"{{ union {{ uint32_t u; float f; }} c; c.u = cpu->fpul; "
+                    f"sh4_set_dr(cpu, {dn}, (double)c.f); }} /* fcnvsd */"), False, None, False
+        if (opcode & 0xF1FF) == 0xF0BD:  # FCNVDS
+            return (f"{{ union {{ float f; uint32_t u; }} c; c.f = (float)sh4_dr(cpu, {dn}); "
+                    f"cpu->fpul = c.u; }} /* fcnvds */"), False, None, False
         if (opcode & 0xF0FF) == 0xF01D:  # FLDS FRm, FPUL
             return f"{{ union {{ float f; uint32_t u; }} c; c.f = cpu->fr[{n}]; cpu->fpul = c.u; }}", False, None, False
         if (opcode & 0xF0FF) == 0xF00D:  # FSTS FPUL, FRn
@@ -1193,12 +1285,17 @@ class SH4Recompiler:
                     f"    sh4_set_t(cpu, !(tmp & 0xFF) || !((tmp>>8)&0xFF) || !((tmp>>16)&0xFF) || !((tmp>>24)&0xFF)); }}"), False, None, False
 
         # ---- MAC.L @Rm+, @Rn+ ----
+        # Avec SR.S = 1 (sets), le résultat est saturé à 48 bits au lieu de
+        # faire le tour (manuel SH-4, MAC.L ; MAME sh4). Voir MAC.W.
         if (opcode & 0xF00F) == 0x000F:
-            return (f"{{ int64_t mac = ((int64_t)cpu->mach << 32) | cpu->macl;\n"
+            return (f"{{ int64_t mac = (int64_t)(((uint64_t)cpu->mach << 32) | cpu->macl);\n"
                     f"    int32_t a = (int32_t)sh4_read32(cpu, cpu->r[{n}]);\n"
                     f"    int32_t b = (int32_t)sh4_read32(cpu, cpu->r[{m}]);\n"
                     f"    mac += (int64_t)a * (int64_t)b;\n"
-                    f"    cpu->mach = (uint32_t)(mac >> 32); cpu->macl = (uint32_t)mac;\n"
+                    f"    if (cpu->sr & SR_S) {{\n"
+                    f"        if (mac > 0x00007FFFFFFFFFFFLL) mac = 0x00007FFFFFFFFFFFLL;\n"
+                    f"        else if (mac < -0x0000800000000000LL) mac = -0x0000800000000000LL; }}\n"
+                    f"    cpu->mach = (uint32_t)((uint64_t)mac >> 32); cpu->macl = (uint32_t)mac;\n"
                     f"    cpu->r[{n}] += 4; cpu->r[{m}] += 4; }}"), False, None, False
 
         # ---- TRAPA ----
@@ -1232,12 +1329,23 @@ class SH4Recompiler:
                     f"    cpu->r[{n}] = (uint32_t)result; }}"), False, None, False
 
         # ---- MAC.W ----
+        # Avec SR.S = 1 (sets), l'addition se fait sur MACL seul, saturée à
+        # 32 bits (0x7FFFFFFF / 0x80000000), MACH inchangé (manuel SH-4 ;
+        # MAME sh4 MAC_W). Sans ça, le décodeur de voix de Grandia II (virgule
+        # fixe 16.16) faisait le tour : un échantillon à peine au-dessus de
+        # +32767 sortait à -32768, un claquement à chaque son fort.
         if (opcode & 0xF00F) == 0x400F:
             return (f"{{ int32_t a = (int32_t)(int16_t)sh4_read16(cpu, cpu->r[{n}]);\n"
                     f"    int32_t b = (int32_t)(int16_t)sh4_read16(cpu, cpu->r[{m}]);\n"
-                    f"    int64_t mac = ((int64_t)cpu->mach << 32) | cpu->macl;\n"
-                    f"    mac += (int64_t)a * (int64_t)b;\n"
-                    f"    cpu->mach = (uint32_t)(mac >> 32); cpu->macl = (uint32_t)mac;\n"
+                    f"    if (cpu->sr & SR_S) {{\n"
+                    f"        int64_t s = (int64_t)(int32_t)cpu->macl + (int64_t)a * (int64_t)b;\n"
+                    f"        if (s > 0x7FFFFFFFLL) s = 0x7FFFFFFFLL;\n"
+                    f"        else if (s < -0x80000000LL) s = -0x80000000LL;\n"
+                    f"        cpu->macl = (uint32_t)(int32_t)s;\n"
+                    f"    }} else {{\n"
+                    f"        int64_t mac = (int64_t)(((uint64_t)cpu->mach << 32) | cpu->macl);\n"
+                    f"        mac += (int64_t)a * (int64_t)b;\n"
+                    f"        cpu->mach = (uint32_t)((uint64_t)mac >> 32); cpu->macl = (uint32_t)mac; }}\n"
                     f"    cpu->r[{n}] += 2; cpu->r[{m}] += 2; }}"), False, None, False
 
         # ---- XOR #imm, R0 ----

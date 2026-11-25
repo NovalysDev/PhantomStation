@@ -2,8 +2,11 @@
 #define DCRECOMP_AICA_PCM_H
 #include <stdint.h>
 #include <stddef.h>
-/* Les 64 voix de la puce son (enveloppes, LFO, volumes) ; pas de DSP ni de filtre.
- * Les registres sont modifiables : une voie qui finit remet son bit KYONB à 0. */
+/* Les 64 voix de la puce son (enveloppes, LFO, volumes) et son processeur
+ * d'effets (DSP) ; pas de filtre. Les registres couvrent toute la puce
+ * (0x8000 octets : voies, sorties du DSP, programme du DSP) et sont
+ * modifiables : une voie qui finit remet son bit KYONB à 0. Le DSP écrit son
+ * anneau d'échos dans la mémoire son. */
 void aica_pcm_reset(void);
 void aica_pcm_key_execute(uint32_t *registers);
 void aica_pcm_reg_write(const uint32_t *registers, uint32_t offset);

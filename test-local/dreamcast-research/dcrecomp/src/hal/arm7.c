@@ -110,6 +110,7 @@ static void arm7_write32(uint32_t addr, uint32_t val) {
     if (!g_ram)
         return;
     addr &= g_ram_mask & ~3u;
+    if (dc_aica_surveille_actif) dc_aica_surveille("ARM7", addr, 4, val);
     g_ram[addr]     = (uint8_t)val;
     g_ram[addr + 1] = (uint8_t)(val >> 8);
     g_ram[addr + 2] = (uint8_t)(val >> 16);
@@ -138,6 +139,7 @@ static void arm7_write8(uint32_t addr, uint8_t val) {
     }
     if (!g_ram)
         return;
+    if (dc_aica_surveille_actif) dc_aica_surveille("ARM7", addr & g_ram_mask, 1, val);
     g_ram[addr & g_ram_mask] = val;
 }
 

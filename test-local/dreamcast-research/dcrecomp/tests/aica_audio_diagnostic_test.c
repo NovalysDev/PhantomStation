@@ -9,7 +9,8 @@
  * resulting PCM must remain identical while diagnostics are collected. */
 int main(int argc, char **argv) {
     assert(argc == 2);
-    uint32_t regs[64*32] = {0};
+    /* Toute la zone des registres (0x8000 octets) : le DSP lit au-dela des voies. */
+    static uint32_t regs[0x8000/4];
     uint8_t *ram = calloc(0x200000, 1);
     int16_t out[735*2];
     assert(ram);

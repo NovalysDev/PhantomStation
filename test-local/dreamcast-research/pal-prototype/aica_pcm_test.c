@@ -5,16 +5,20 @@
 #include <string.h>
 #include <stdio.h>
 /* Essais du mélangeur des voix de la puce son. Attaque instantanée (AR = 31),
- * volume plein (TL = 0, DISDL = 15, centre) : un échantillon sort tel quel. */
+ * volume plein (TL = 0, DISDL = 15, centre). La sortie garde une marge de
+ * 20000/32768 avant son coude doux (MIX_MARGE, aica_pcm.c) : 1000 sort en 610,
+ * -1000 en -611. Les registres couvrent toute la puce (0x8000 octets, DSP
+ * compris) : le mélangeur y lit aussi le programme du DSP. */
+#define MARGE(v) ((int)(((long long)(v) * 20000) >> 15))
 int main(void) {
- uint32_t regs[64*32]={0}; uint8_t *ram=calloc(0x200000,1); int16_t out[64]={0}; assert(ram);
+ static uint32_t regs[0x8000/4]; uint8_t *ram=calloc(0x200000,1); int16_t out[64]={0}; assert(ram);
  /* PCM 16 bits, deux échantillons en boucle. */
  ram[0x100]=0xe8; ram[0x101]=0x03; ram[0x102]=0x18; ram[0x103]=0xfc;   /* 1000, -1000 */
  regs[0]=0xC200; regs[1]=0x100; regs[2]=0; regs[3]=2; regs[4]=31; regs[5]=31; regs[9]=15<<8;
  aica_pcm_reset(); aica_pcm_mix(regs,ram,out,1);   /* la mémoire son est connue avant le départ */
  aica_pcm_key_execute(regs); aica_pcm_mix(regs,ram,out,4);
  /* Le tout premier échantillon sort encore atténué : l'attaque part de 0x280. */
- assert(out[2]==-1000 && out[3]==-1000 && out[4]==1000 && out[6]==-1000);
+ assert(out[2]==MARGE(-1000) && out[3]==MARGE(-1000) && out[4]==MARGE(1000) && out[6]==MARGE(-1000));
  assert(aica_pcm_channel_active(0) && (regs[0] & 0x4000));
  /* Touche lâchée : le son s'éteint en quelques millisecondes (RR = 31, 3,6 ms),
   * au lieu d'être coupé net, puis la voie se libère. */
@@ -28,7 +32,7 @@ int main(void) {
  aica_pcm_reset(); ram[0x200]=64; ram[0x201]=192; memset(regs,0,sizeof regs);
  regs[0]=0xC080; regs[1]=0x200; regs[3]=2; regs[4]=31; regs[5]=31; regs[9]=15<<8;
  aica_pcm_mix(regs,ram,out,1); aica_pcm_key_execute(regs); aica_pcm_mix(regs,ram,out,4);
- assert(out[2]==-16384 && out[4]==0);
+ assert(out[2]==MARGE(-16384) && out[4]==0);
  assert(!aica_pcm_channel_active(0) && !(regs[0] & 0x4000));
  regs[32]=0xC080; regs[33]=0x200; regs[35]=2; aica_pcm_key_execute(regs);   /* note sur la voie 1 */
  assert(!aica_pcm_channel_active(0) && aica_pcm_channel_active(1));
@@ -36,7 +40,7 @@ int main(void) {
  aica_pcm_reset(); memset(regs,0,sizeof regs);
  regs[0]=0xC200; regs[1]=0x100; regs[3]=2; regs[4]=31; regs[5]=31; regs[9]=15<<8; regs[10]=16<<8;
  aica_pcm_mix(regs,ram,out,1); aica_pcm_key_execute(regs); aica_pcm_mix(regs,ram,out,2);
- assert(out[2]==-500 && out[3]==-500);
+ assert(out[2]==MARGE(-500) && out[3]==MARGE(-500));
  /* État relu par le pilote (0x2810) : fin de boucle vue, puis effacée. */
  aica_pcm_mix(regs,ram,out,2);
  assert(aica_pcm_status(0) & 0x8000); assert(!(aica_pcm_status(0) & 0x8000));

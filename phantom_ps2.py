@@ -81,7 +81,8 @@ def windows_environment():
     allowed = ('SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'USERNAME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles', 'CommonProgramFiles(x86)', 'CommonProgramW6432', 'ALLUSERSPROFILE', 'PUBLIC', 'HOMEDRIVE', 'HOMEPATH', 'OS', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'COMPUTERNAME', 'DriverData')
     env = {key: os.environ[key] for key in allowed if key in os.environ}
     env['PATH'] = os.pathsep.join([str(portable / p) for p in folders] + [str(Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32')])
-    env['PS2_JOBS'] = '4'
+    import coeurs
+    env['PS2_JOBS'] = str(coeurs.nombre())   # réglage « Cœurs du processeur » de Paramètres
     env['PS2_AVX2'] = '0'
     return env
 

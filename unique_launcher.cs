@@ -367,6 +367,37 @@ class UniqueLauncher : Form {
         }
         return destination;
     }
+    // Copies a small file of the archive into the cache when it is missing or
+    // different there (compared by SHA-256), without touching anything else.
+    static void RefreshCachedFile(ZipArchive archive, string root, string name) {
+        var entry = archive.GetEntry(name);
+        if (entry == null) return;
+        string path = Path.Combine(root, name);
+        byte[] incoming;
+        using (var input = entry.Open()) using (var buffer = new MemoryStream()) {
+            input.CopyTo(buffer); incoming = buffer.ToArray();
+        }
+        if (File.Exists(path)) using (var sha = SHA256.Create()) {
+            byte[] incomingHash = sha.ComputeHash(incoming), existingHash;
+            using (var stream = File.OpenRead(path)) existingHash = sha.ComputeHash(stream);
+            if (System.Linq.Enumerable.SequenceEqual(incomingHash, existingHash)) return;
+        }
+        string update = path + ".mise-a-jour-" + Guid.NewGuid().ToString("N");
+        File.WriteAllBytes(update, incoming);
+        if (File.Exists(path)) File.Replace(update, path, null);
+        else File.Move(update, path);
+    }
+    // Large file of the archive (a disc) copied into the cache only when missing.
+    static void ExtractMissingFile(ZipArchive archive, string root, string name) {
+        var entry = archive.GetEntry(name);
+        string path = Path.Combine(root, name);
+        if (entry == null || File.Exists(path)) return;
+        string update = path + ".mise-a-jour-" + Guid.NewGuid().ToString("N");
+        using (var input = entry.Open()) using (var output = new FileStream(update, FileMode.CreateNew, FileAccess.Write))
+            input.CopyTo(output);
+        if (new FileInfo(update).Length != entry.Length) { File.Delete(update); throw new IOException("Disque du jeu endommagé : " + name); }
+        File.Move(update, path);
+    }
     public static string Prepare() {
         using (var archive = ZipFile.OpenRead(PackagePath)) {
             var manifest = archive.GetEntry("phantom-package.txt");
@@ -431,26 +462,13 @@ class UniqueLauncher : Form {
                     }
                     // The intro has its own small executable in the cache, so it
                     // still works if the packaged game is moved or renamed.
-                    var introEntry = archive.GetEntry("phantom-intro.exe");
-                    string introPath = Path.Combine(root, "phantom-intro.exe");
-                    if (introEntry != null) {
-                        byte[] incoming;
-                        using (var input = introEntry.Open()) using (var buffer = new MemoryStream()) {
-                            input.CopyTo(buffer); incoming = buffer.ToArray();
-                        }
-                        bool updateIntro = true;
-                        if (File.Exists(introPath)) using (var sha = SHA256.Create()) {
-                            byte[] incomingHash = sha.ComputeHash(incoming), existingHash;
-                            using (var stream = File.OpenRead(introPath)) existingHash = sha.ComputeHash(stream);
-                            updateIntro = !System.Linq.Enumerable.SequenceEqual(incomingHash, existingHash);
-                        }
-                        if (updateIntro) {
-                            string update = introPath + ".mise-a-jour-" + Guid.NewGuid().ToString("N");
-                            File.WriteAllBytes(update, incoming);
-                            if (File.Exists(introPath)) File.Replace(update, introPath, null);
-                            else File.Move(update, introPath);
-                        }
-                    }
+                    RefreshCachedFile(archive, root, "phantom-intro.exe");
+                    // A rebuilt game may bring new cheat codes: the engine reads
+                    // them from the cache, which is otherwise prepared only once.
+                    RefreshCachedFile(archive, root, "phantom-cheats.cht");
+                    // A game rebuilt with all its discs: the later discs are
+                    // added next to the first one if the cache does not have them.
+                    for (int n = 2; n <= 8; n++) ExtractMissingFile(archive, root, "disque-" + n + ".chd");
                     // New launcher art is installed once in an existing cache;
                     // preserve any artwork the player has subsequently edited.
                     foreach (string artPath in new[] {"assets/img/boxart.tga", "assets/img/phantom-background.tga", "assets/phantom-codes-default.tsv", "assets/gamecontrollerdb.txt", "licences/LICENSE-SDL-GameControllerDB.txt"}) {

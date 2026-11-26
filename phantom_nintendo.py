@@ -130,7 +130,9 @@ def make_art(platform, rom, name, chosen, work, log):
                 return True
             except (OSError, ValueError):
                 return False
-        for title in (rom.stem, stripped + ' (Europe)', stripped, name + ' (Europe)', name):
+        # « The House of the Dead 2 » est rangé « House of the Dead 2, The (Europe) ».
+        inverse = re.sub(r'^(The|A|An)\s+(.+?)(\s+-\s+.*)?$', r'\2, \1\3', name, flags=re.I) if re.match(r'(?i)(the|a|an)\s', name) else None
+        for title in (rom.stem, stripped + ' (Europe)', stripped, name + ' (Europe)', name, *((inverse + ' (Europe)', inverse) if inverse else ())):
             if fetch(title):
                 break
         if source is None:
@@ -408,7 +410,8 @@ def _build_generic_n64(rom, cartridge, name, output, icon, background, log, pack
         if 'n64_sdl.cpp' not in (build_dir / 'build.ninja').read_text(encoding='utf-8'):
             raise RuntimeError('L’interface vidéo N64 n’a pas pu être configurée.')
         _fix_ninja_cmake_path(build_dir, toolbin)
-        compile_project([toolbin / 'cmake.exe', '--build', build_dir, '--parallel', '2'])
+        import coeurs
+        compile_project([toolbin / 'cmake.exe', '--build', build_dir, '--parallel', str(coeurs.nombre())])
         executable = build_dir / 'jeu_n64.exe'
         if not executable.is_file():
             raise RuntimeError('La compilation N64 n’a pas produit de programme.')

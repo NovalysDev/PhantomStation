@@ -53,6 +53,7 @@ add_library(dcrecomp_core STATIC
     src/hal/dc_hardware.c
     src/hal/dc_cinematic.c
     src/hal/dc_cheats.c
+    src/hal/dc_disques.c
     src/hal/dc_bios.c
     src/hal/naomi_io.c
     src/hal/arm7.c

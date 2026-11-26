@@ -144,8 +144,13 @@ class DreamcastGameForm : Form {
             string token=Environment.GetEnvironmentVariable("PHANTOM_DC_TRIAL_TOKEN");
             bool trialUsed=runtime==Path.Combine(folder,"dreamcast-candidat.exe") &&
                !String.IsNullOrEmpty(token) && System.Text.RegularExpressions.Regex.IsMatch(token,"^[0-9a-f]{32}$");
+            // Jeu sur plusieurs disques : disque-2.chd, disque-3.chd… suivent le
+            // premier ; F4 passe au disque suivant pendant la partie.
+            string discs="\""+disc+"\"";
+            for(int n=2;n<=8 && File.Exists(Path.Combine(folder,"disque-"+n+".chd"));n++)
+                discs+=" \""+Path.Combine(folder,"disque-"+n+".chd")+"\"";
             var start=new ProcessStartInfo(runtime) { WorkingDirectory=folder, UseShellExecute=false,
-                Arguments="\""+boot+"\" \""+disc+"\"" };
+                Arguments="\""+boot+"\" "+discs };
             string selectedCard=Environment.GetEnvironmentVariable("PHANTOM_SELECTED_DC_CARD");
             if(!String.IsNullOrWhiteSpace(selectedCard) && !File.Exists(selectedCard))
                 throw new IOException(L("La carte Dreamcast sélectionnée est introuvable.","The selected Dreamcast memory card is missing."));

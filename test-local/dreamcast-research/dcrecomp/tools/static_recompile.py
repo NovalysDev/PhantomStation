@@ -16,6 +16,7 @@ import struct
 import sys
 import json
 import os
+import re
 from collections import defaultdict
 
 LOAD_ADDR = 0x8C010000
@@ -1802,6 +1803,48 @@ class SH4Recompiler:
             f.write("    sh4_call_indirect(cpu);\n")
             f.write("}\n")
 
+    # Une fonction traduite plus grande que ceci va seule dans son fichier,
+    # compilé sans optimisation : clang -O1 passait des heures sur une fonction
+    # de 9 Mo de Dino Crisis (26/11/2026), -O0 la compile en 14 s.
+    GIANT_FUNCTION_CHARS = 1_000_000
+    LIGHT_LIST = "compilation-legere.txt"
+
+    LIGHT_ENTRY = "phantom_entree_lourde"
+
+    @classmethod
+    def guaranteed_tail_calls(cls, code):
+        """Sans optimisation, « func_X(cpu); return; » resterait un appel : la
+        pile grossirait à chaque tour d'une boucle qui traverse des fonctions.
+        musttail en fait un vrai saut à tout niveau d'optimisation, mais exige
+        la même signature des deux côtés. Les fonctions à plusieurs entrées,
+        « impl_X(SH4CPU *cpu, uint32_t entry) », prennent donc ici leur entrée
+        dans une variable du fichier, lue dès leur début : tout le fichier n'a
+        plus que des fonctions (SH4CPU *cpu), et chaque saut terminal, porte
+        d'entrée comprise, devient un musttail."""
+        entry = cls.LIGHT_ENTRY
+        code = re.sub(r'^(static void impl_[0-9A-Fa-f]{8})\(SH4CPU \*cpu, uint32_t entry\) \{',
+                      lambda m: f"{m.group(1)}(SH4CPU *cpu) {{\n    uint32_t entry = {entry};", code, flags=re.M)
+        # Portes d'entrée « { impl_X(cpu, 0x..u); } » : saut garanti.
+        code = re.sub(r'\{ (impl_[0-9A-Fa-f]{8})\(cpu, ([^;()]+)\); \}',
+                      lambda m: f"{{ {entry} = {m.group(2)}; __attribute__((musttail)) return {m.group(1)}(cpu); }}", code)
+        # Tout autre appel d'une impl garde sa valeur d'entrée.
+        code = re.sub(r'\b(impl_[0-9A-Fa-f]{8})\(cpu, ([^;()]+)\)',
+                      lambda m: f"({entry} = {m.group(2)}, {m.group(1)}(cpu))", code)
+        out = []
+        lines = code.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith(' '):
+                if line.strip() == "sh4_jump_indirect(cpu);" and i + 1 < len(lines) and lines[i + 1].strip() == "return;":
+                    out.append(line.replace("sh4_jump_indirect(cpu);", "__attribute__((musttail)) return sh4_jump_indirect(cpu);"))
+                    i += 2
+                    continue
+                line = re.sub(r'\b(func_[0-9A-Fa-f]{8})\(cpu\); return;', r'__attribute__((musttail)) return \1(cpu);', line)
+            out.append(line)
+            i += 1
+        return f"#include <stdint.h>\nstatic uint32_t {entry};\n\n" + "\n".join(out)
+
     def recompile_all(self, output_dir, batch_size=500):
         """Recompile all functions, split into multiple source files."""
         os.makedirs(output_dir, exist_ok=True)
@@ -1810,6 +1853,11 @@ class SH4Recompiler:
         file_idx = 0
         func_idx = 0
         total_funcs = len(sorted_funcs)
+        light_files = []
+        header = ("/* Auto-generated - DO NOT EDIT */\n"
+                  "#include \"recompiler/sh4_cpu.h\"\n"
+                  "#include \"game/game_functions.h\"\n"
+                  "#include <math.h>\n\n")
 
         while func_idx < total_funcs:
             batch = sorted_funcs[func_idx:func_idx + batch_size]
@@ -1829,7 +1877,13 @@ class SH4Recompiler:
                     if global_idx + 1 < total_funcs:
                         next_addr = sorted_funcs[global_idx + 1][0]
                     code = self.recompile_function(addr, info, next_func_addr=next_addr)
-                    if code:
+                    if code and len(code) > self.GIANT_FUNCTION_CHARS:
+                        name = f"game_code_{file_idx:03d}_lourd_{addr:08X}.c"
+                        with open(os.path.join(output_dir, name), 'w') as heavy:
+                            heavy.write(header + self.guaranteed_tail_calls(code) + "\n")
+                        light_files.append(name)
+                        print(f"  Giant function 0x{addr:08X} ({len(code) // 1024} KB) -> {name}, built without optimisation")
+                    elif code:
                         f.write(code)
                         f.write("\n\n")
 
@@ -1837,6 +1891,8 @@ class SH4Recompiler:
             func_idx += batch_size
             file_idx += 1
 
+        with open(os.path.join(output_dir, self.LIGHT_LIST), 'w') as f:
+            f.write("".join(name + "\n" for name in light_files))
         print(f"Total: {file_idx} source files, {total_funcs} functions")
         return file_idx
 

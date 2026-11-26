@@ -1,0 +1,33 @@
+# Shadowman - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 4
+
+cheat0_desc = "Have 999 Cadeaux"
+cheat0_address = "2885468"
+cheat0_value = "999"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "Have Infinite 9mm Ammo"
+cheat1_address = "2885472"
+cheat1_value = "255"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "Have Infinite Violator Ammo"
+cheat2_address = "2885464"
+cheat2_value = "255"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"
+cheat3_desc = "Have Infinite Shotgun Shells"
+cheat3_address = "2885460"
+cheat3_value = "255"
+cheat3_memory_search_size = "4"
+cheat3_cheat_type = "1"
+cheat3_handler = "1"
+cheat3_enable = "false"

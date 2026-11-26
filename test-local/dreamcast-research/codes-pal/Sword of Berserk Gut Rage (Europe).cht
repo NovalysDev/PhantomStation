@@ -1,0 +1,33 @@
+# Sword of Berserk Gut Rage - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 4
+
+cheat0_desc = "Infinite Grenades"
+cheat0_address = "14640378"
+cheat0_value = "3"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "Infinite Fairy Dust"
+cheat1_address = "14640374"
+cheat1_value = "3"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "Infinite Hand Cannon"
+cheat2_address = "14640376"
+cheat2_value = "3"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"
+cheat3_desc = "Infinite Credits"
+cheat3_address = "1181152"
+cheat3_value = "16"
+cheat3_memory_search_size = "4"
+cheat3_cheat_type = "1"
+cheat3_handler = "1"
+cheat3_enable = "false"

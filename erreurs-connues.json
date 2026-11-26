@@ -370,6 +370,46 @@
       },
       "date": "2026-11-25",
       "verifie": true
+    },
+    {
+      "id": "dc-fonction-geante-clang",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Compilation figee des heures sur un fichier traduit geant (clang -O1)",
+      "symptome": "Dino Crisis (France) : la compilation reste bloquee des heures sans message ; un clang.exe a 0 % de processeur ; Windows signale RADAR_PRE_LEAK_64 pour clang-22.exe.",
+      "cause": "Une fonction a plusieurs entrees traduite en 9 Mo de C (impl_8C0FE494, 5622 portes d'entree, game_code_011.c de 15 Mo). En -O1, l'inlining puis memcpyopt de clang ne finissent pas (plus de 10 min mesurees, des heures en vrai). -O0 la compile en 14 s, mais sans optimisation les sauts terminaux deviennent des appels et la pile grossirait a chaque tour d'une boucle qui traverse des fonctions.",
+      "correctif": "static_recompile.py : une fonction de plus de 1 Mo de C va seule dans game_code_NNN_lourd_ADRESSE.c (liste compilation-legere.txt), compilee en -O0 -g0 (pal-prototype/CMakeLists.txt). Ses sauts terminaux et ses portes d'entree deviennent des musttail, de vrais sauts meme en -O0 : les impl_ y prennent leur entree dans la variable phantom_entree_lourde pour avoir la meme signature (SH4CPU *cpu) que leurs cibles. Verifie sur le fichier reel : 478 sauts terminaux et 5622 portes d'entree garantis, 5883 jmp et aucun saut terminal reste un call. Test : test_compilation_lourde.py.",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/dcrecomp/tools/static_recompile.py",
+        "motifs": [
+          "GIANT_FUNCTION_CHARS",
+          "phantom_entree_lourde"
+        ]
+      },
+      "date": "2026-11-26",
+      "verifie": true
+    },
+    {
+      "id": "dc-commande-orpheline",
+      "console": "DC",
+      "jeux": [
+        "*"
+      ],
+      "titre": "Lot bloque sans erreur : delai depasse mais un programme orphelin garde la sortie",
+      "symptome": "Compilation d'un dossier arretee des heures sur un jeu, sans message ; un clang.exe orphelin (son ninja a disparu) ; impossible a fermer depuis le Gestionnaire des taches.",
+      "cause": "run_command (build_pal_prototype.py) n'arretait que cmake au delai depasse. ninja et clang survivaient ; le clang orphelin heritait de la sortie et la lecture de cette sortie attendait sans fin.",
+      "correctif": "build_pal_prototype.py : chaque commande est placee avec toute sa descendance dans un job Windows (_Descendance) ; au delai depasse, TerminateJobObject arrete tout, orphelins compris, et l'erreur 'Delai depasse' remonte : le jeu passe en echec, est retente une fois en fin de liste (lanceur.py), et le lot continue. Compilation C sur 12 coeurs (compile_jobs). Test : test_compilation_lourde.py (DelaiDepasse).",
+      "controle": {
+        "fichier": "test-local/dreamcast-research/build_pal_prototype.py",
+        "motifs": [
+          "_Descendance",
+          "TerminateJobObject"
+        ]
+      },
+      "date": "2026-11-26",
+      "verifie": true
     }
   ]
 }

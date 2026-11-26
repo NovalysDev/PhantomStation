@@ -1,0 +1,19 @@
+# Ready 2 Rumble - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 2
+
+cheat0_desc = "Infinite Cash"
+cheat0_address = "1075724"
+cheat0_value = "30000"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "Always Have 20 Fights Left"
+cheat1_address = "1075740"
+cheat1_value = "20"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"

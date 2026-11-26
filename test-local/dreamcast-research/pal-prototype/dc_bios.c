@@ -11,6 +11,7 @@
 #include "hal/dc_bios.h"
 #include "hal/dc_hardware.h"
 #include "hal/dc_ralentis.h"
+#include "hal/dc_disques.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -289,6 +290,7 @@ void sh4_bios_set_gdrom_track(const char *path, uint32_t start_lba) {
 static int gdc_read_sectors_disque(SH4CPU *cpu, uint32_t lba, uint32_t count, uint32_t dest);
 /* La lecture du disque est chronométrée pour la surveillance des ralentissements. */
 static int gdc_read_sectors(SH4CPU *cpu, uint32_t lba, uint32_t count, uint32_t dest) {
+    (void)dc_disques_etat_lecteur();   /* finit un changement de disque en cours */
     dc_ralentis_debut(RAL_DISQUE);
     int r = gdc_read_sectors_disque(cpu, lba, count, dest);
     dc_ralentis_fin(RAL_DISQUE);
@@ -480,7 +482,8 @@ static int syscall_gdrom(SH4CPU *cpu) {
             /* Drive status: 0 busy, 1 pause, 2 standby, 3 play, 4 seek,
              * 5 scan, 6 open, 7 no disc, 8 retry, 9 error.
              * Disc type: 0x00 CDDA, 0x10 CDROM, 0x20 XA, 0x30 CDI, 0x80 GDROM. */
-            sh4_write32(cpu, cpu->r[4], 2);        /* standby: disc in, idle */
+            /* standby: disc in, idle ; 6 (open) a few moments while F4 changes the disc. */
+            sh4_write32(cpu, cpu->r[4], (uint32_t)dc_disques_etat_lecteur());
             sh4_write32(cpu, cpu->r[4] + 4, 0x80); /* GD-ROM */
         }
         return 0;

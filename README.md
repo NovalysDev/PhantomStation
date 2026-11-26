@@ -28,6 +28,16 @@ For Dreamcast games opened from the library, the compiler can prepare newly disc
 
 The Dreamcast engine now handles double-precision maths and byte-sized switch tables, which fixes the Re-Volt black screen. It also emulates the sound chip's effects processor (echo, reverb) and clips loud peaks as the console does, so Ryudo's scream early in Grandia II no longer crackles. A game created earlier benefits after it is rebuilt.
 
+**New since 1.0.9** (in the source; not yet in a portable release):
+
+- **Compile a whole folder:** the “Compile a whole folder…” button builds every game found in a folder and its subfolders, one after another. No file is skipped: every version, region and disc is built. The discs of one PS1 or Dreamcast game are grouped and built together, and archives are extracted first. Game names keep the original title, without region, language or date tags. A failed game is retried once at the end of the list.
+- **Multi-disc Dreamcast games:** all discs go into one EXE. In game, **F4** changes disc; the lid opens briefly, as on the console.
+- **PAL Dreamcast cheat codes:** 127 PAL games and 1,050 codes, from [bucanero.com.ar](https://www.bucanero.com.ar/dreamcast/codes/) (CDX codes, decrypted) and the CodeBreaker “all cheats” 2.8 save file. A PAL game gets its codes automatically when built, and F11 opens their menu. Codes start disabled; their effect must be checked in game. US and Japanese images do not receive PAL codes.
+- **CPU and cores:** the creation screen shows the detected processor. Just below it, you choose how many cores builds use, for every console. A fifth of the threads (at least two) always stays free for Windows. PhantomStation never starts more than one C compilation per 2 GB of memory.
+- **Stuck builds:** a Dreamcast function larger than 1 MB of C is compiled on its own, without optimisation, with guaranteed tail calls. A build that exceeds its time limit now stops all of its processes.
+
+**Dreamcast games built locally (26 November 2026):** 14 PAL games have been built into an EXE on the author’s PC: 102 Dalmatians: Puppies to the Rescue, Alone in the Dark: The New Nightmare, Chicken Run, Crazy Taxi 2, Dead or Alive 2, Dino Crisis, F355 Challenge: Passione Rossa, Grand Theft Auto 2, Grandia II, Jet Set Radio, Rayman 2: The Great Escape, Re-Volt, The House of the Dead 2, Toy Story 2: Buzz l'Éclair à la rescousse !. This list only records successful builds: it does not prove that each game can be completed.
+
 ## What it does
 
 - Select a console, provide a game image, choose a title and output folder, and start the build.
@@ -53,7 +63,7 @@ The compiler has a **French / English** selector that remembers the user's choic
 | Nintendo 64 | `.z64`, `.n64`, `.v64` | Native Console hybrid recompilation and interpretation; a separate GoldenEye 007 (Nintendo 64, Europe/PAL) native-port path | Experimental. A successful build or boot is not evidence of full playability. |
 | Dreamcast | `.chd` | Experimental SH-4 recompilation and hardware runtime | Experimental. Graphics, audio, controls, saves and playability differ across games. |
 
-Archives such as `.7z` must be extracted first. CHD input is supported by the experimental Dreamcast path; PS1 and PS2 use the formats listed above. Selecting a French/PAL image does not translate a game. Compatibility depends on the exact image and revision. GoldenEye 007 for Nintendo 64, European/PAL version, uses a dedicated adaptation rather than the generic N64 path.
+Archives such as `.7z` must be extracted first (“Compile a whole folder…” extracts them itself). CHD input is supported by the experimental Dreamcast path; PS1 and PS2 use the formats listed above. Selecting a French/PAL image does not translate a game. Compatibility depends on the exact image and revision. GoldenEye 007 for Nintendo 64, European/PAL version, uses a dedicated adaptation rather than the generic N64 path.
 
 ### Controllers and settings
 

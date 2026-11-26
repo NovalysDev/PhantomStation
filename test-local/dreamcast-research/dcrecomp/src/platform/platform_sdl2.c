@@ -10,6 +10,7 @@
 #include "hal/dc_cinematic.h"
 #include "hal/aica_pcm.h"
 #include "hal/dc_cheats.h"
+#include "hal/dc_disques.h"
 #include "hal/dc_ralentis.h"
 #include "hal/pvr2.h"
 #include <stdio.h>
@@ -622,8 +623,44 @@ void platform_shutdown(void) {
     printf("[PLATFORM] SDL2 shutdown\n");
 }
 
+#ifdef _WIN32
+#include <SDL_syswm.h>
+/* F11 (codes), F4 (disque) et, menu ouvert, les flèches, Entrée et Échap :
+ * le jeu est imbriqué dans le lanceur, lui-même dans PhantomStation, et la
+ * touche n'arrivait que si le dernier clic était dans l'image du jeu (rien
+ * à la manette, ou après un clic sur la barre). Ces touches sont donc lues
+ * ici directement, seulement quand la fenêtre qui contient le jeu est au
+ * premier plan ; les mêmes touches reçues par SDL sont ignorées plus bas. */
+static void touches_hors_focus(void) {
+    static int avant[6];
+    static const int vk[6] = { VK_F11, VK_F4, VK_UP, VK_DOWN, VK_RETURN, VK_ESCAPE };
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!g_window || !SDL_GetWindowWMInfo(g_window, &info)) return;
+    HWND racine = GetAncestor(info.info.win.window, GA_ROOT);
+    int devant = racine && racine == GetForegroundWindow();
+    for (int i = 0; i < 6; ++i) {
+        int bas = devant && (GetAsyncKeyState(vk[i]) & 0x8000);
+        int appui = bas && !avant[i];
+        avant[i] = bas;
+        if (!appui) continue;
+        if (i == 0) { dc_cheats_menu_toggle(); g_keyboard_buttons = 0xffff; }
+        else if (i == 1) dc_disques_suivant();
+        else if (dc_cheats_menu_is_open()) {
+            if (i == 2) dc_cheats_menu_move(-1);
+            else if (i == 3) dc_cheats_menu_move(1);
+            else if (i == 4) dc_cheats_menu_select();
+            else dc_cheats_menu_toggle();
+        }
+    }
+}
+#endif
+
 bool platform_poll_events(DCHardware *hw) {
     uint64_t key_now=SDL_GetTicks64();
+#ifdef _WIN32
+    touches_hors_focus();
+#endif
     /* Diagnostic input can target a hidden test instance without taking focus. */
     static uint16_t test_key = 0;
     static uint64_t test_key_until = 0;
@@ -638,14 +675,12 @@ bool platform_poll_events(DCHardware *hw) {
             int c = fgetc(input);
             fclose(input);
             remove(test_input);
-            if (c == 'M') {
-                SDL_Event key = {0}; key.type = SDL_KEYDOWN; key.key.keysym.sym = SDLK_F11;
-                SDL_PushEvent(&key); c = 0;
-            }
+            if (c == 'M') { dc_cheats_menu_toggle(); g_keyboard_buttons = 0xffff; c = 0; }   /* comme F11 */
+            else if (c == 'C') { dc_disques_suivant(); c = 0; }   /* disque suivant, comme F4 */
             else if (dc_cheats_menu_is_open()) {
-                SDL_Event key = {0}; key.type = SDL_KEYDOWN;
-                key.key.keysym.sym = c == 'U' ? SDLK_UP : c == 'D' ? SDLK_DOWN : c == 'A' ? SDLK_RETURN : SDLK_UNKNOWN;
-                if (key.key.keysym.sym != SDLK_UNKNOWN) SDL_PushEvent(&key);
+                if (c == 'U') dc_cheats_menu_move(-1);
+                else if (c == 'D') dc_cheats_menu_move(1);
+                else if (c == 'A') dc_cheats_menu_select();
                 c = 0;
             }
             test_key = c == 'S' ? CONT_START : c == 'A' ? CONT_A :
@@ -759,6 +794,17 @@ bool platform_poll_events(DCHardware *hw) {
             if (getenv("DCRECOMP_DEBUG_INPUT"))
                 fprintf(stderr,"[INPUT-KEY] type=%s sym=%d scan=%d\n",event.type==SDL_KEYDOWN?"down":"up",event.key.keysym.sym,event.key.keysym.scancode);
             bool pressed = (event.type == SDL_KEYDOWN);
+#ifdef _WIN32
+            /* Sous Windows, ces touches sont lues par touches_hors_focus() :
+             * les traiter aussi ici ouvrirait puis refermerait le menu. */
+            if (event.key.keysym.sym == SDLK_F4 || event.key.keysym.sym == SDLK_F11) break;
+            if (dc_cheats_menu_is_open()) break;
+#endif
+            if (event.key.keysym.sym == SDLK_F4) {
+                /* Disque suivant, pour les jeux sur plusieurs disques (F4 comme sur PS1). */
+                if (pressed && !event.key.repeat) dc_disques_suivant();
+                break;
+            }
             if (event.key.keysym.sym == SDLK_F11) {
                 if (pressed && !event.key.repeat) {
                     dc_cheats_menu_toggle();
@@ -865,7 +911,7 @@ void platform_swap_buffers(void) {
     /* A test may capture the composed frame; normal games do not create files. */
     { static int checked; static const char *shot;
       if (!checked) { shot = getenv("DCRECOMP_TEST_OSD_SCREENSHOT"); checked = 1; }
-      if (shot && (dc_cinematic_message() || dc_cheats_menu_is_open())) { pvr2_screenshot(shot); shot = NULL; } }
+      if (shot && (dc_cinematic_message() || dc_cheats_menu_is_open() || dc_disques_message())) { pvr2_screenshot(shot); shot = NULL; } }
     SDL_GL_SwapWindow(g_window);
     /* Optional stress test for occasional long rendering stalls. */
     static int stall=-1; static unsigned swaps;

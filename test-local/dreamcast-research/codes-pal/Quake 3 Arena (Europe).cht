@@ -1,0 +1,33 @@
+# Quake 3: Arena - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 4
+
+cheat0_desc = "Ammo Booster"
+cheat0_address = "375298"
+cheat0_value = "28929"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "P1 Health Single Mode Only"
+cheat1_address = "3227624"
+cheat1_value = "100"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "Health Pick Ups Double Your Health (Good And Bad)"
+cheat2_address = "401494"
+cheat2_value = "13116"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"
+cheat3_desc = "All Weapons Do 100 Damage"
+cheat3_address = "399310"
+cheat3_value = "29084"
+cheat3_memory_search_size = "4"
+cheat3_cheat_type = "1"
+cheat3_handler = "1"
+cheat3_enable = "false"

@@ -14,6 +14,16 @@ list(REMOVE_ITEM CORE_SOURCES "src/hal/dc_bios.c")
 set_property(TARGET dcrecomp_core PROPERTY SOURCES ${CORE_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/dc_bios.c)
 set(PAL_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../generated-pal-next" CACHE PATH "Translated private game sources")
 file(GLOB GAME_SOURCES CONFIGURE_DEPENDS "${PAL_GENERATED_DIR}/src/game/*.c")
+# Fonctions traduites géantes, chacune seule dans son fichier (static_recompile.py,
+# compilation-legere.txt) : clang -O1 y passait des heures (Dino Crisis, une
+# fonction de 9 Mo, 26/11/2026). Compilées sans optimisation ; leurs sauts
+# terminaux sont des musttail, de vrais sauts même en -O0.
+if(EXISTS "${PAL_GENERATED_DIR}/src/game/compilation-legere.txt")
+  file(STRINGS "${PAL_GENERATED_DIR}/src/game/compilation-legere.txt" PAL_FICHIERS_LEGERS)
+  foreach(PAL_NOM IN LISTS PAL_FICHIERS_LEGERS)
+    set_source_files_properties("${PAL_GENERATED_DIR}/src/game/${PAL_NOM}" PROPERTIES COMPILE_OPTIONS "-O0;-g0")
+  endforeach()
+endif()
 option(PHANTOM_DC_GENERIC_TEST "Build the game-independent research bootstrap" OFF)
 if(PHANTOM_DC_GENERIC_TEST)
   if(PHANTOM_DC_RESEARCH_MAIN)

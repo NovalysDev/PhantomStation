@@ -8,6 +8,7 @@ import struct
 import sys
 import threading
 import uuid
+import shutil
 import tempfile
 import wave
 import tomllib
@@ -20,6 +21,8 @@ from phantom_intro import PhantomIntro
 from bibliotheque import register_game, discover_games, documents_folder
 from gestion_jeux import console_directory, games_in_directory, move_games
 from detection_doublons import find_duplicates
+from compilation_dossier import clean_game_title, extraire_archive, scan_folder
+import coeurs
 from phantom_library_ui import LibraryView
 from phantom_compiler_game import GameInCompiler
 from phantom_ui import ctk, button, panel, HeroBanner, tr, load_language, set_language, BG, SURFACE, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_HOVER
@@ -61,7 +64,7 @@ DISC_FORMAT_HELP = {
     'NES': 'NES : une cartouche .nes par jeu.\nArchive .7z : extrais-la d’abord.\nCompatibilité et réglages à vérifier selon le jeu.',
     'SNES': 'Super Nintendo : une cartouche .sfc ou .smc par jeu.\nArchive .7z : extrais-la d’abord.\nCompatibilité et réglages à vérifier selon le jeu.',
     'N64': 'Nintendo 64 : fichiers .z64, .v64 ou .n64.\nMoteur hybride expérimental : la compatibilité dépend du jeu.',
-    'DC': 'Dreamcast : fichier .chd. Mode expérimental : certains jeux peuvent ne pas fonctionner.',
+    'DC': 'Dreamcast : fichier .chd. Jeu sur plusieurs disques : choisis-les tous, F4 change de disque en jeu.\nMode expérimental : certains jeux peuvent ne pas fonctionner.',
 }
 SETTINGS_FILE = Path(os.environ.get('LOCALAPPDATA') or (Path.home() / 'AppData' / 'Local')) / 'PhantomStation' / 'compilateur.json'
 NOTICE_FILE = SETTINGS_FILE.parent / 'utilisation-responsable.json'
@@ -164,7 +167,7 @@ def build_environment():
     env = os.environ.copy()
     env['PSXRECOMP_TOOLCHAIN_DIR'] = str(TOOLCHAIN)
     env['PSXRECOMP_PYTHON'] = str(PYTHON)
-    env['CMAKE_BUILD_PARALLEL_LEVEL'] = '2'
+    env['CMAKE_BUILD_PARALLEL_LEVEL'] = str(coeurs.nombre())   # choix de l'écran de création
     env['PYTHONUTF8'] = '1'
     env['PYTHONIOENCODING'] = 'utf-8'
     env['PATH'] = str(TOOLCHAIN / 'bin') + os.pathsep + str(PYTHON.parent) + os.pathsep + env.get('PATH', '')
@@ -225,9 +228,11 @@ def set_resolution(config, resolution):
 
 
 def game_name_from_file(filename):
-    """Use the first disc's filename, without its extension or disc number."""
+    """Use the first disc's filename, without its extension, disc number, or
+    region, language, date and revision tags (« Re-Volt (Europe) (En,Fr) »
+    -> « Re-Volt »). The original filename still finds the cover art."""
     name = Path(filename).stem.strip()
-    cleaned = re.sub(r'\s*[\[(](?:disc|disk|disque|cd|track|piste)\s*[-_. ]*\d+[\])]\s*$', '', name, flags=re.IGNORECASE).strip()
+    cleaned = clean_game_title(name)
     cleaned = re.sub(r"^(Tony\s+Hawk['’]s)\s+PS\s+(\d+)$", r'\1 \2', cleaned, flags=re.IGNORECASE)
     return cleaned or name
 
@@ -597,6 +602,8 @@ def cleanup_descriptors(records):
 
 
 class App:
+    batch = None   # aucun lot « Compiler tout un dossier » en cours
+
     def __init__(self, root):
         self.root = root
         root.title(tr('PhantomStation — Recompilation de jeux rétro'))
@@ -624,6 +631,7 @@ class App:
         self.background_path = None
         self.output_dir = load_output_directory()
         self.busy = False
+        self.batch = None   # compilation d'un dossier entier : file d'attente et bilan
         self.moving_games = False
         self.last_ps2_output = None
         self.last_output_by_console = {}
@@ -709,6 +717,8 @@ class App:
         ctk.CTkEntry(l, textvariable=self.name, height=37, corner_radius=10, fg_color='#0b1727', border_color=BORDER, text_color=TEXT).pack(fill='x', pady=(0, 8))
         self.choose = button(l, '＋  Ajouter un ou plusieurs disques', self.select)
         self.choose.pack(fill='x')
+        self.choose_folder = button(l, 'Compiler tout un dossier…', self.select_folder)
+        self.choose_folder.pack(fill='x', pady=(6, 0))
         self.disc_text = tk.StringVar(value=tr('Aucun disque sélectionné.'))
         ctk.CTkLabel(l, textvariable=self.disc_text, text_color=MUTED, font=('Segoe UI', 10), anchor='w', justify='left', wraplength=350, height=19).pack(fill='x', pady=(4, 4))
         disc_actions = ctk.CTkFrame(l, fg_color='transparent'); disc_actions.pack(fill='x', pady=(0, 3))
@@ -731,6 +741,37 @@ class App:
         self.bios_box = ctk.CTkCheckBox(r, text=tr('BIOS PhantomStation (expérimental)'), variable=self.phantom_bios, text_color=TEXT, font=('Segoe UI', 11), corner_radius=5, fg_color=ACCENT, hover_color=ACCENT_HOVER); self.bios_box.pack(anchor='w', pady=(0, 7))
         self.options_hint = tk.StringVar(value='')
         ctk.CTkLabel(r, textvariable=self.options_hint, text_color=MUTED, font=('Segoe UI', 10), anchor='w', justify='left', wraplength=330).pack(fill='x', pady=(0, 4))
+        # Processeur détecté, et cœurs utilisés pour compiler : pour toutes les
+        # consoles (réglage commun, coeurs.py). La liste s'arrête au maximum :
+        # une part des threads reste toujours à Windows.
+        cpu_box = ctk.CTkFrame(r, fg_color='#0b1727', corner_radius=10, border_width=1, border_color=BORDER)
+        cpu_box.pack(fill='x', pady=(0, 6))
+        ctk.CTkLabel(cpu_box, text=coeurs.nom_processeur() or tr('Processeur'), text_color=TEXT, font=('Segoe UI', 11, 'bold'),
+                     anchor='w', height=18).pack(fill='x', padx=10, pady=(5, 0))
+        physical, memory = coeurs.coeurs_physiques(), coeurs.memoire_go()
+        threads, kept = coeurs.processeur(), coeurs.reserve_windows()
+        en = load_language() == 'en'
+        details = []
+        if physical and physical != threads:
+            details.append(f'{physical} cores, {threads} threads' if en else f'{physical} cœurs, {threads} threads')
+        else:
+            details.append(f'{threads} cores' if en else f'{threads} cœurs')
+        if memory:
+            details.append(f'{round(memory)} GB' if en else f'{round(memory)} Go')
+        if kept:
+            details.append(f'{kept} always kept for Windows' if en else f'{kept} toujours gardés pour Windows')
+        ctk.CTkLabel(cpu_box, text=' · '.join(details), text_color=MUTED, font=('Segoe UI', 10), anchor='w', height=16).pack(fill='x', padx=10)
+        cpu_row = ctk.CTkFrame(cpu_box, fg_color='transparent'); cpu_row.pack(fill='x', padx=10, pady=(3, 7))
+        ctk.CTkLabel(cpu_row, text=tr('Cœurs pour compiler'), text_color=TEXT, font=('Segoe UI', 11)).pack(side='left')
+        self.cores_auto_label = tr('Automatique') + f' ({coeurs.recommande()})'
+        choice = coeurs.choix()
+        self.cores_choice = tk.StringVar(value=self.cores_auto_label if choice == 'auto' else str(min(choice, coeurs.maximum())))
+        self.cores_box = ctk.CTkComboBox(cpu_row, variable=self.cores_choice,
+                                         values=[self.cores_auto_label] + [str(n) for n in range(1, coeurs.maximum() + 1)],
+                                         command=self.change_cores, state='readonly', width=150, height=28, corner_radius=10,
+                                         fg_color=CARD, border_color=BORDER, button_color='#28536d')
+        self.cores_box.pack(side='left', padx=(8, 0))
+        ctk.CTkLabel(cpu_row, text=f'max {coeurs.maximum()}', text_color=MUTED, font=('Segoe UI', 10)).pack(side='left', padx=(8, 0))
         destination = ctk.CTkFrame(r, fg_color='transparent'); destination.pack(fill='x')
         self.output_button = button(destination, 'Ouvrir le dossier de la console', self.open_packages, width=180)
         self.output_button.pack(side='left', fill='x', expand=True)
@@ -1031,6 +1072,161 @@ The selected interface language does not translate the game itself: the game lan
             self.suggested_name = ''
         self.refresh_discs()
 
+    def change_cores(self, value):
+        """Choix de l'écran de création : « Automatique » ou un nombre, enregistré
+        pour toutes les compilations suivantes (même un lot en cours, jeu suivant)."""
+        try:
+            coeurs.enregistrer('auto' if value == self.cores_auto_label else int(value))
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(tr('Réglage non enregistré'), str(exc), parent=self.root)
+
+    def select_folder(self):
+        """Compile, one after another, every game found in a folder and its
+        subfolders: nothing is left out. Discs of one PS1/Dreamcast game go
+        together, archives are extracted then built. Games already in the
+        library were built before and are not built twice."""
+        if self.busy: return
+        console = self.console.get()
+        en = load_language() == 'en'
+        options = {'title': tr('Choisir le dossier des jeux à compiler'), 'mustexist': True}
+        if self.discs:
+            options['initialdir'] = str(Path(self.discs[-1]).parent)
+        folder = filedialog.askdirectory(**options)
+        if not folder: return
+        try:
+            games, archives = scan_folder(folder, console, detect_iso_platform)
+            library = discover_games(self.output_dir, include_cover=False)
+        except OSError as exc:
+            messagebox.showerror(tr('Dossier inaccessible'), str(exc), parent=self.root)
+            return
+        waiting, present = [], []
+        for name, discs, game_console in games:
+            discs = [str(path) for path in discs]
+            item = {'name': name, 'discs': discs, 'console': game_console}
+            (present if find_duplicates(game_console, name, discs, library) else waiting).append(item)
+        waiting += [{'archive': str(path), 'name': Path(path).name} for path in archives]
+        def listing(items, limit=12):
+            lines = ['• ' + item for item in items[:limit]]
+            if len(items) > limit:
+                lines.append((f'… and {len(items) - limit} more' if en else f'… et {len(items) - limit} autre(s)'))
+            return '\n'.join(lines)
+        def label(item):
+            if 'archive' in item:
+                return item['name'] + (' — archive: extracted, then built' if en else ' — archive : extraite puis compilée')
+            text = item['name']
+            if len(item['discs']) > 1:
+                text += f' — {len(item["discs"])} discs' if en else f' — {len(item["discs"])} disques'
+            if item['console'] != console:
+                text += ' — ' + item['console']
+            return text
+        notes = []
+        if present:
+            notes.append(('Already built, in your library:\n' if en else 'Déjà compilés, dans ta bibliothèque :\n')
+                         + listing([item['name'] for item in present], 6))
+        if not waiting:
+            messagebox.showinfo(tr('Compiler un dossier'),
+                                ((f'No new {console} game found in this folder.' if en else f'Aucun nouveau jeu {console} trouvé dans ce dossier.')
+                                 + ('\n\n' + '\n\n'.join(notes) if notes else '')), parent=self.root)
+            return
+        question = ((f'{len(waiting)} item(s) will be built one after another, with these titles:\n\n' if en
+                     else f'{len(waiting)} jeu(x) vont être compilés l’un après l’autre, avec ces titres :\n\n')
+                    + listing([label(item) for item in waiting])
+                    + ('\n\n' + '\n\n'.join(notes) if notes else '')
+                    + ('\n\nThis can take a long time. Start?' if en else '\n\nCela peut prendre longtemps. Commencer ?'))
+        if not messagebox.askyesno(tr('Compiler un dossier'), question, parent=self.root):
+            return
+        self.batch = {'console': console, 'queue': waiting, 'total': len(waiting), 'done': [], 'failed': [], 'sbi': [],
+                      'current': '', 'item': None, 'temp': {}, 'retries': []}
+        self.discs.clear(); self.name.set(''); self.suggested_name = ''
+        self.icon_path = None; self.background_path = None
+        self.icon_text.set(tr('Jaquette automatique si disponible'))
+        self.batch_next()
+
+    def batch_release_item(self):
+        """After a game of an extracted archive, its temporary folder goes once
+        every game of that archive is built."""
+        batch = self.batch
+        item = batch and batch.get('item')
+        if not item or not item.get('temp'):
+            return
+        folder = item['temp']
+        batch['temp'][folder] -= 1
+        if batch['temp'][folder] <= 0:
+            del batch['temp'][folder]
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def batch_extract(self, archive, console):
+        """Worker: extract an archive into a temporary folder and look for games in it."""
+        folder = tempfile.mkdtemp(prefix='phantom-archive-')
+        try:
+            extraire_archive(archive, folder)
+            games, inner = scan_folder(folder, console, detect_iso_platform)
+            if inner:
+                raise OSError(('Archive inside an archive: ' if load_language() == 'en' else 'Archive dans l’archive : ') + Path(inner[0]).name)
+            self.events.put(('batch_archive', (archive, folder, games, None)))
+        except Exception as exc:
+            shutil.rmtree(folder, ignore_errors=True)
+            self.events.put(('batch_archive', (archive, None, [], str(exc))))
+
+    def batch_archive_ready(self, archive, folder, games, error):
+        batch = self.batch
+        if batch is None: return
+        en = load_language() == 'en'
+        if error or not games:
+            reason = error or (f'no {batch["console"]} game in this archive' if en else f'aucun jeu {batch["console"]} dans l’archive')
+            batch['failed'].append((Path(archive).name, reason))
+            if folder: shutil.rmtree(folder, ignore_errors=True)
+        else:
+            items = [{'name': name, 'discs': [str(path) for path in discs], 'console': game_console, 'temp': folder}
+                     for name, discs, game_console in games]
+            batch['temp'][folder] = len(items)
+            batch['total'] += len(items) - 1
+            batch['queue'][0:0] = items
+        self.busy = False
+        self.root.after(100, self.batch_next)
+
+    def batch_next(self):
+        batch = self.batch
+        if batch is None: return
+        if not batch['queue']:
+            self.batch = None
+            for folder in list(batch['temp']):
+                shutil.rmtree(folder, ignore_errors=True)
+            self.library.refresh()
+            en = load_language() == 'en'
+            lines = [(f'{len(batch["done"])} game(s) created' if en else f'{len(batch["done"])} jeu(x) créé(s)')
+                     + (f', {len(batch["failed"])} failed.' if en else f', {len(batch["failed"])} échec(s).')]
+            if batch['retries']:
+                lines.append(('Retried at the end after a first failure: ' if en else 'Retentés en fin de liste après un premier échec : ')
+                             + ', '.join(batch['retries'][:10]))
+            if batch['failed']:
+                lines.append('\n'.join('• ' + name + ' — ' + reason for name, reason in batch['failed'][:10]))
+                lines.append('The build log keeps the details.' if en else 'Le journal de création garde le détail.')
+            for name, missing in batch['sbi'][:5]:
+                lines.append((f'{name}: SBI file missing for ' if en else f'{name} : fichier SBI manquant pour ') + ', '.join(missing))
+            self.status.set(lines[0])
+            messagebox.showinfo(tr('Compiler un dossier'), '\n\n'.join(lines), parent=self.root)
+            return
+        item = batch['queue'].pop(0)
+        batch['item'] = item
+        batch['current'] = item['name']
+        if 'archive' in item:
+            self.busy = True
+            self.status.set((f'Extracting {item["name"]}…' if load_language() == 'en' else f'Extraction de {item["name"]}…'))
+            threading.Thread(target=self.batch_extract, args=(item['archive'], batch['console']), daemon=True).start()
+            return
+        if self.console.get() != item['console']:
+            self.console.set(item['console'])
+            self.change_console(item['console'], update_status=False)
+        self.discs = list(item['discs']); self.name.set(item['name']); self.suggested_name = item['name']
+        self.icon_path = None; self.background_path = None
+        self.refresh_discs()
+        self.build()
+        if not self.busy:   # a check refused this game: note it and go on
+            batch['failed'].append((item['name'], tr('non lancé')))
+            self.batch_release_item()
+            self.root.after(100, self.batch_next)
+
     def clear_discs(self):
         if self.busy: return
         self.discs.clear()
@@ -1072,6 +1268,8 @@ The selected interface language does not translate the game itself: the game lan
                         messagebox.showerror(tr('Déplacement interrompu'), str(error) + tr('\nLes jeux déjà déplacés restent accessibles dans la bibliothèque.'), parent=self.root)
                     else:
                         self.finish_output_directory_change(new_folder)
+                elif kind == 'batch_archive':
+                    self.batch_archive_ready(*value)
                 elif kind == 'phase':
                     if self.progress_window:
                         self.progress_window.set_phase(value)
@@ -1097,7 +1295,29 @@ The selected interface language does not translate the game itself: the game lan
                     self.finished_game = Path(game) if success and game else None
                     self.finished_images = (images, game_identity) if success else ([], None)
                     self.status.set(tr(message))
-                    if self.progress_window:
+                    if self.batch is not None:
+                        # Compilation d'un dossier : on note le résultat et on
+                        # passe au jeu suivant sans attendre « Terminé ».
+                        item = self.batch.get('item') or {}
+                        if success:
+                            self.batch['done'].append((self.batch['current'], Path(game).name if game else ''))
+                        elif not item.get('retried'):
+                            # Un jeu en échec est retenté une fois, en fin de liste
+                            # (son dossier d'archive extrait reste jusque-là).
+                            item['retried'] = True
+                            self.batch['queue'].append(item)
+                            self.batch['total'] += 1
+                            self.batch['retries'].append(self.batch['current'])
+                            if item.get('temp') in self.batch['temp']:
+                                self.batch['temp'][item['temp']] += 1
+                        else:
+                            self.batch['failed'].append((self.batch['current'], tr(message)))
+                        if self.progress_window:
+                            self.progress_window.completed = True
+                            self.progress_window.finish()
+                        else:
+                            self.operation_finished()
+                    elif self.progress_window:
                         self.progress_window.complete(success, message)
                     else:
                         self.operation_finished()
@@ -1115,7 +1335,7 @@ The selected interface language does not translate the game itself: the game lan
             for line in cleanup_failed_attempt(attempt):
                 self.append(line + '\n')
             self.status.set(tr('Échec de la compilation — détails dans le journal.'))
-        for button in (self.start, self.choose, self.launch_button, self.project_button,
+        for button in (self.start, self.choose, self.choose_folder, self.launch_button, self.project_button,
                        self.output_button, self.icon_button, self.background_button):
             button.configure(state='normal')
         self.console_switch.configure(state='normal')
@@ -1130,6 +1350,15 @@ The selected interface language does not translate the game itself: the game lan
         self.change_console(self.console.get(), update_status=False)
         self.refresh_discs()
         missing, self.finished_missing_sbi = self.finished_missing_sbi, []
+        if self.batch is not None:
+            # Pas de question par jeu (raccourci, images d'origine) pendant un
+            # dossier : les fichiers d'origine sont gardés, le bilan vient à la fin.
+            if game and missing:
+                self.batch['sbi'].append((game.stem, list(missing)))
+            self.finished_images = ([], None)
+            self.batch_release_item()
+            self.root.after(300, self.batch_next)
+            return
         if game and missing:
             messagebox.showwarning(tr('Fichier SBI manquant'),
                 tr('Le jeu a été créé, mais un fichier SBI nécessaire n’a pas été trouvé pour :\n\n')
@@ -1228,6 +1457,14 @@ The selected interface language does not translate the game itself: the game lan
                                                 on_report=self.show_error_report,
                                                 startup_sound=(BASE / 'assets' / console_sound[console]) if console in console_sound else None,
                                                 logo_path=(BASE / 'assets' / console_logo[console]) if console in console_logo else None)
+            if self.batch is not None:
+                window = self.progress_window
+                rank = len(self.batch['done']) + len(self.batch['failed']) + 1
+                label = f'{rank}/{self.batch["total"]} · {self.batch["current"]}'
+                window.window.title('PhantomStation — ' + label)
+                window.canvas.create_text(window.width // 2, int(window.height * .08), text=label,
+                                          fill='#73ddeb', font=('Segoe UI', 13, 'bold'))
+                self.append(('\n=== Folder ' if load_language() == 'en' else '\n=== Dossier ') + label + ' ===\n')
         except Exception:
             self.root.deiconify()
             raise
@@ -1374,6 +1611,8 @@ The selected interface language does not translate the game itself: the game lan
             messagebox.showerror(tr('Dossier inaccessible'), str(exc))
 
     def confirm_existing_game(self, console, name):
+        if self.batch is not None:
+            return True   # déjà vérifié pour tout le dossier avant de commencer
         games = discover_games(self.output_dir, include_cover=False)
         matches = find_duplicates(console, name, self.discs, games)
         if not matches:
@@ -1438,6 +1677,7 @@ The selected interface language does not translate the game itself: the game lan
         self.busy = True
         self.start.configure(state='disabled')
         self.choose.configure(state='disabled')
+        self.choose_folder.configure(state='disabled')
         self.disc_remove.configure(state='disabled')
         self.disc_clear.configure(state='disabled')
         self.launch_button.configure(state='disabled')
@@ -1492,15 +1732,16 @@ The selected interface language does not translate the game itself: the game lan
             slug = f'{base_slug}-{index}'; index += 1
         self.busy = True
         for control in (self.start, self.choose, self.disc_remove, self.disc_clear, self.launch_button,
-                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch):
+                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch, self.choose_folder):
             control.configure(state='disabled')
         self.status.set(tr('Compilation PS2 en cours…'))
         self.show_progress('Préparation du projet PS2…')
         threading.Thread(target=self.worker_ps2, args=(name, slug, self.discs[0], self.icon_path, output_dir, self.background_path, self.players.get()), daemon=True).start()
 
     def start_dreamcast_build(self):
-        if len(self.discs) != 1 or Path(self.discs[0]).suffix.lower() != '.chd':
-            messagebox.showwarning('Image Dreamcast', 'Sélectionne une seule image Dreamcast au format CHD.')
+        # Plusieurs disques = un seul jeu : tous sont rangés dans le jeu, F4 change de disque.
+        if not self.discs or len(self.discs) > 8 or any(Path(d).suffix.lower() != '.chd' for d in self.discs):
+            messagebox.showwarning(tr('Image Dreamcast'), tr('Sélectionne les disques d’un seul jeu Dreamcast, au format CHD (8 au plus).'))
             return
         name = self.name.get().strip()
         if not name:
@@ -1517,18 +1758,19 @@ The selected interface language does not translate the game itself: the game lan
             return
         self.busy = True
         for control in (self.start, self.choose, self.disc_remove, self.disc_clear, self.launch_button,
-                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch):
+                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch, self.choose_folder):
             control.configure(state='disabled')
         self.status.set('Compilation Dreamcast expérimentale en cours…')
         self.show_progress('Préparation du jeu Dreamcast…')
-        threading.Thread(target=self.worker_dreamcast, args=(name, self.discs[0], self.icon_path, output_dir, self.background_path), daemon=True).start()
+        threading.Thread(target=self.worker_dreamcast, args=(name, self.discs[0], self.icon_path, output_dir, self.background_path, list(self.discs[1:])), daemon=True).start()
 
-    def worker_dreamcast(self, name, image, icon_path, output, background):
+    def worker_dreamcast(self, name, image, icon_path, output, background, other_discs=()):
         try:
             self.events.put(('phase', 'Création et génération Dreamcast…'))
             command = [sys.executable, '-u', str(BASE / 'phantom_dreamcast.py'), '--rom', image, '--nom', name, '--sortie', str(output)]
             if icon_path: command += ['--icone', str(icon_path)]
             if background: command += ['--fond', str(background)]
+            for disc in other_discs: command += ['--disque', str(disc)]
             env = os.environ.copy(); env['PYTHONUTF8'] = '1'
             proc = subprocess.Popen(command, cwd=str(BASE), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, encoding='utf-8', errors='replace', env=env, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -1551,7 +1793,7 @@ The selected interface language does not translate the game itself: the game lan
             self.last_output_by_console['DC'] = result
             try: register_game(result)
             except OSError as exc: self.events.put(('log', 'Bibliothèque non mise à jour : ' + str(exc) + '\n'))
-            try: images = original_image_snapshot([image], [], BASE / 'descripteurs')
+            try: images = original_image_snapshot([image, *other_discs], [], BASE / 'descripteurs')
             except (OSError, ValueError): images = []
             state = result.stat()
             self.events.put(('done', (True, 'Prototype Dreamcast créé — fonctionnement encore expérimental.', str(result), images,
@@ -1581,7 +1823,7 @@ The selected interface language does not translate the game itself: the game lan
             return
         self.busy = True
         for control in (self.start, self.choose, self.disc_remove, self.disc_clear, self.launch_button,
-                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch):
+                        self.project_button, self.output_button, self.icon_button, self.background_button, self.console_switch, self.choose_folder):
             control.configure(state='disabled')
         self.status.set('Compilation ' + console + ' en cours…')
         self.show_progress('Préparation du jeu ' + console + '…')

@@ -1,0 +1,33 @@
+# Alone in the Dark The New Nightmare - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 4
+
+cheat0_desc = "Infinite Health"
+cheat0_address = "7331584"
+cheat0_value = "100"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "Infinite Pistol Ammo"
+cheat1_address = "7332092"
+cheat1_value = "12"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "Infinite Shotgun Ammo"
+cheat2_address = "7332100"
+cheat2_value = "9"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"
+cheat3_desc = "Infinite Grenade Launcher Ammo"
+cheat3_address = "7332148"
+cheat3_value = "10"
+cheat3_memory_search_size = "4"
+cheat3_cheat_type = "1"
+cheat3_handler = "1"
+cheat3_enable = "false"

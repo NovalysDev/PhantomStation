@@ -1,0 +1,33 @@
+# NHL 2K - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 4
+
+cheat0_desc = "Away Team Scores 20 Points"
+cheat0_address = "1452416"
+cheat0_value = "20"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "Away Team Scores 0 Points"
+cheat1_address = "1452416"
+cheat1_value = "0"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "Home Team Scores 20 Points"
+cheat2_address = "1452420"
+cheat2_value = "20"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"
+cheat3_desc = "Home Team Scores 0 Points"
+cheat3_address = "1452420"
+cheat3_value = "0"
+cheat3_memory_search_size = "4"
+cheat3_cheat_type = "1"
+cheat3_handler = "1"
+cheat3_enable = "false"

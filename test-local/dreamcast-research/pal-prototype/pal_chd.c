@@ -55,6 +55,26 @@ int pal_chd_open_stream(FILE *stream) {
     return pal_chd_finish_open(chd_open_file(stream,CHD_OPEN_READ,NULL,&disc));
 }
 
+/* Disque suivant d'un jeu sur plusieurs disques : le flux reste ouvert par
+ * l'appelant. En cas d'échec, l'ancien disque reste en place. */
+int pal_chd_switch_stream(FILE *stream) {
+    if (!stream) return -1;
+    chd_file *ancien = disc; unsigned char *ancien_tampon = buffer;
+    Track anciennes[99]; memcpy(anciennes, tracks, sizeof tracks);
+    unsigned ancien_n = ntracks, ancien_par = per_hunk, ancien_octets = hunk_bytes;
+    disc = NULL; buffer = NULL; ntracks = 0; cached = UINT32_MAX;
+    if (pal_chd_finish_open(chd_open_file(stream, CHD_OPEN_READ, NULL, &disc)) == 0) {
+        if (ancien) chd_close(ancien);
+        free(ancien_tampon);
+        return 0;
+    }
+    if (disc) chd_close(disc);
+    free(buffer);
+    disc = ancien; buffer = ancien_tampon; memcpy(tracks, anciennes, sizeof tracks);
+    ntracks = ancien_n; per_hunk = ancien_par; hunk_bytes = ancien_octets; cached = UINT32_MAX;
+    return -1;
+}
+
 int pal_chd_sector(uint32_t lba, unsigned char out[2048]) {
     for (unsigned i=0; i<ntracks; i++) {
         Track t=tracks[i];

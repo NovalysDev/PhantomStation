@@ -18,7 +18,19 @@ original = game_info(old)
 if game_running(original): raise RuntimeError('Le jeu est ouvert : installation reportée.')
 folder = Path(__file__).resolve().parent / 'correction-apprentissage' / old.stem
 folder.mkdir(parents=True, exist_ok=True)
-candidate = phantom_dreamcast.build(disc, original['name'], folder, package_id=original['id'])
+# Jeu sur plusieurs disques : les disques suivants sont à côté du premier.
+others = [disc.parent / f'disque-{n}.chd' for n in range(2, 9) if (disc.parent / f'disque-{n}.chd').is_file()]
+# Le disque du dossier de travail s'appelle « disque.chd » : la jaquette ne se
+# retrouverait pas d'après ce nom. Le jeu garde donc la sienne (ou celle donnée
+# en 3e argument, par exemple celle de avant-correction.exe).
+cover = Path(sys.argv[3]) if len(sys.argv) > 3 else folder / 'jaquette.png'
+if len(sys.argv) <= 3:
+    with zipfile.ZipFile(old) as current:
+        if 'assets/img/boxart.png' in current.namelist():
+            cover.write_bytes(current.read('assets/img/boxart.png'))
+        else:
+            cover = None
+candidate = phantom_dreamcast.build(disc, original['name'], folder, icon=cover, package_id=original['id'], autres_disques=others)
 updated = game_info(candidate)
 if original['id'] != updated['id'] or original['name'] != updated['name']:
     raise RuntimeError('Le jeu ou son dossier de sauvegarde ne correspond pas.')

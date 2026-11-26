@@ -1,0 +1,33 @@
+# Daytona USA 2001 - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 4
+
+cheat0_desc = "Xtended Time Always"
+cheat0_address = "2513972"
+cheat0_value = "3800"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "9999 Pts"
+cheat1_address = "2843674"
+cheat1_value = "9999"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "On Last Lap"
+cheat2_address = "2516832"
+cheat2_value = "10"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"
+cheat3_desc = "Always Place 1st"
+cheat3_address = "3431360"
+cheat3_value = "0"
+cheat3_memory_search_size = "4"
+cheat3_cheat_type = "1"
+cheat3_handler = "1"
+cheat3_enable = "false"

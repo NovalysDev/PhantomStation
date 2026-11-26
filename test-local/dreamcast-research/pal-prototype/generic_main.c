@@ -14,7 +14,17 @@
 #include <shellapi.h>
 
 int pal_chd_open_stream(FILE *stream);
+int pal_chd_switch_stream(FILE *stream);
 int pal_chd_root_file(const char *name, unsigned char *dest, uint32_t capacity);
+#include "hal/dc_disques.h"
+
+/* Jeux sur plusieurs disques : tous restent ouverts, F4 passe au suivant. */
+#define DISQUES_MAX 8
+static FILE *g_disques[DISQUES_MAX];
+static int g_nb_disques;
+static int changer_disque(int index) {
+    return index >= 0 && index < g_nb_disques ? pal_chd_switch_stream(g_disques[index]) : -1;
+}
 void phantom_learn_set_boot(uint32_t size);
 /* Written by the compiler from what it found on this disc (src/game). */
 extern const uint32_t phantom_profile_irq;
@@ -162,16 +172,22 @@ int main(int argc, char **argv) {
         puts("Dreamcast generic runtime available (game compatibility unverified).");
         return 0;
     }
-    if (argc != 3) { fprintf(stderr, "usage: generic boot.bin disc.chd\n"); return 2; }
+    if (argc < 3 || argc > 2 + DISQUES_MAX) { fprintf(stderr, "usage: generic boot.bin disc.chd [disc-2.chd ...]\n"); return 2; }
     /* A stalled game is killed from outside; buffered output would lose the
      * diagnostics that say where. */
     setvbuf(stdout, NULL, _IONBF, 0);
     int wide_argc = 0;
     wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
-    if (!wide || wide_argc != 3) return 2;
-    FILE *boot = _wfopen(wide[1], L"rb"), *disc = _wfopen(wide[2], L"rb");
+    if (!wide || wide_argc != argc) return 2;
+    FILE *boot = _wfopen(wide[1], L"rb");
+    for (int i = 2; i < wide_argc; i++) g_disques[g_nb_disques++] = _wfopen(wide[i], L"rb");
     LocalFree(wide);
+    FILE *disc = g_disques[0];
+    for (int i = 1; i < g_nb_disques; i++)
+        if (!g_disques[i]) { fprintf(stderr,"disc %d unavailable\n", i + 1); return 1; }
     if (!boot || !disc || pal_chd_open_stream(disc)) { fprintf(stderr,"disc unavailable\n"); return 1; }
+    dc_disques_configure(g_nb_disques, changer_disque);
+    if (g_nb_disques > 1) printf("[DISQUE] %d disques : F4 passe au suivant\n", g_nb_disques);
     SH4CPU cpu;
     g_watch_cpu = &cpu;
     sh4_init_ex(&cpu, DC_RAM_SIZE_16MB);

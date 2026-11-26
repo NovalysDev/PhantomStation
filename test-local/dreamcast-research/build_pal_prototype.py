@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 LAB = Path(__file__).resolve().parent
 ROOT = LAB.parents[1]
@@ -65,38 +66,80 @@ def save_entries(path, entries):
     path.write_text(''.join(f'0x{entry:08X}\n' for entry in sorted(entries)), encoding='ascii')
 
 
-def run_command(cmd, *, env, timeout=900, on_line=None):
-    if on_line is not None:
-        process=subprocess.Popen([str(x) for x in cmd],env=env,stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',
-                                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-        expired=threading.Event()
-        def stop():
-            expired.set()
-            try: process.kill()
+class _Descendance:
+    """Job Windows qui contient une commande et tout ce qu'elle lance (cmake ->
+    ninja -> clang). Le 26/11/2026, un délai dépassé n'arrêtait que cmake : un
+    clang orphelin gardait la sortie ouverte et la compilation attendait sans
+    fin (4 h sur Dino Crisis). arreter() termine toute la descendance."""
+    def __init__(self, process):
+        self.job = None
+        if os.name != 'nt':
+            return
+        import ctypes
+        self.k = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.k.CreateJobObjectW.restype = ctypes.c_void_p
+        self.k.CreateJobObjectW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p)
+        self.k.AssignProcessToJobObject.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        self.k.TerminateJobObject.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        self.k.CloseHandle.argtypes = (ctypes.c_void_p,)
+        job = self.k.CreateJobObjectW(None, None)
+        if job and self.k.AssignProcessToJobObject(job, int(process._handle)):
+            self.job = job
+        elif job:
+            self.k.CloseHandle(job)
+        self.process = process
+
+    def arreter(self):
+        if self.job:
+            self.k.TerminateJobObject(self.job, 1)
+        else:
+            try: self.process.kill()
             except OSError: pass
-        timer=threading.Timer(timeout,stop); timer.daemon=True; timer.start()
-        lines=[]
-        try:
-            for line in process.stdout:
-                lines.append(line)
-                if len(lines)>200: del lines[0]
-                on_line(line.rstrip())
-            status=process.wait()
-        finally:
-            timer.cancel();process.stdout.close()
-        if expired.is_set(): raise RuntimeError('Délai dépassé : '+str(cmd[0]))
-        if status: raise RuntimeError('Commande échouée : '+str(cmd[0])+'\n'+''.join(lines)[-6000:])
-        return ''.join(lines)
-    result=subprocess.run([str(x) for x in cmd],env=env,stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',
-                          timeout=timeout,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-    if result.returncode:
-        raise RuntimeError('Commande échouée : ' + str(cmd[0]) + '\n' + result.stdout[-6000:])
-    return result.stdout
+
+    def fermer(self):
+        if self.job:
+            self.k.CloseHandle(self.job); self.job = None
+
+
+def run_command(cmd, *, env, timeout=900, on_line=None):
+    process=subprocess.Popen([str(x) for x in cmd],env=env,stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',
+                             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    famille=_Descendance(process)
+    expired=threading.Event()
+    def stop():
+        expired.set()
+        famille.arreter()
+    timer=threading.Timer(timeout,stop); timer.daemon=True; timer.start()
+    lines=[]
+    try:
+        for line in process.stdout:
+            lines.append(line)
+            if len(lines)>200: del lines[0]
+            if on_line is not None: on_line(line.rstrip())
+        status=process.wait()
+    finally:
+        timer.cancel();process.stdout.close();famille.fermer()
+    if expired.is_set(): raise RuntimeError('Délai dépassé : '+str(cmd[0]))
+    if status: raise RuntimeError('Commande échouée : '+str(cmd[0])+'\n'+''.join(lines)[-6000:])
+    return ''.join(lines)
 
 
 LEARNING_ROUNDS = 5
+
+
+def compile_jobs() -> int:
+    """Compilations C en parallèle : le réglage « Cœurs du processeur » de
+    Paramètres (coeurs.py, automatique par défaut, jamais tous les cœurs).
+    PHANTOM_DC_JOBS le change pour un essai."""
+    try:
+        if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
+        import coeurs
+        return coeurs.nombre()
+    except Exception:
+        try: wanted = int(os.getenv('PHANTOM_DC_JOBS', '0'))
+        except ValueError: wanted = 0
+        return wanted if wanted > 0 else max(1, (os.cpu_count() or 4) * 3 // 4)
 
 
 def learning_rounds() -> int:
@@ -237,7 +280,7 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
                          '-DPAL_GENERATED_DIR='+str(game),'-DPHANTOM_DC_GENERIC_TEST=ON'],env=env)
             configured=True
         log('Compilation du moteur Windows…')
-        run_command([TOOLS/'cmake.exe','--build',build_dir,'--target','pal_probe','--parallel','4'],
+        run_command([TOOLS/'cmake.exe','--build',build_dir,'--target','pal_probe','--parallel',str(compile_jobs())],
                     env=env,timeout=5400,on_line=log)
         if attempt == rounds: break
         for dll in (LIBCHDR,SDL_DLL): shutil.copy2(dll,build_dir/dll.name)
@@ -364,7 +407,7 @@ def _build_profile(boot,boot_path,work,game,source,headers,env,log,generic,house
                  '-DCMAKE_BUILD_TYPE=Debug','-DCMAKE_C_COMPILER='+str(TOOLS/'clang.exe'),
                  '-DCMAKE_MAKE_PROGRAM='+str(TOOLS/'ninja.exe'),
                  '-DPAL_GENERATED_DIR='+str(game),'-DPHANTOM_DC_GENERIC_TEST='+('ON' if generic else 'OFF')],env=env)
-    run_command([TOOLS/'cmake.exe','--build',build_dir,'--target','pal_probe','--parallel','4'],env=env,on_line=log)
+    run_command([TOOLS/'cmake.exe','--build',build_dir,'--target','pal_probe','--parallel',str(compile_jobs())],env=env,on_line=log)
     exe=build_dir/'pal_probe.exe'
     return exe
 
@@ -434,7 +477,7 @@ def build(image: Path, destination: Path, log=print) -> Path:
                     log('Aucun nouveau code découvert : apprentissage terminé.'); break
                 log(f'{new} nouveau(x) point(s) d’entrée découvert(s) ; nouvelle traduction.')
                 wire_learned(learned,work,game,env,boot,log)
-                run_command([TOOLS/'cmake.exe','--build',work/'build','--target','pal_probe','--parallel','4'],
+                run_command([TOOLS/'cmake.exe','--build',work/'build','--target','pal_probe','--parallel',str(compile_jobs())],
                             env=env,on_line=log)
         output=work/'result';output.mkdir()
         shutil.copy2(exe,output/'Crazy Taxi - prototype.exe')
@@ -448,8 +491,16 @@ def build(image: Path, destination: Path, log=print) -> Path:
             'moteur':moteur_empreinte(),
             'statut':'prototype local : visuels, son, sauvegardes et intégration restent expérimentaux'},
             ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-        try: output.rename(destination)
-        except FileExistsError: raise FileExistsError('Le dossier de destination a été créé entre-temps.') from None
+        # Sous Windows, le jeu d'essai qui vient de se fermer (ou l'antivirus)
+        # peut garder un fichier ouvert quelques instants : on réessaie 10 s.
+        for essai in range(20):
+            try:
+                output.rename(destination)
+                break
+            except FileExistsError: raise FileExistsError('Le dossier de destination a été créé entre-temps.') from None
+            except PermissionError:
+                if essai == 19: raise
+                time.sleep(0.5)
     log('Programme expérimental construit ; compatibilité du jeu non vérifiée.' if generic else 'Prototype construit et tests de base réussis.')
     return destination
 

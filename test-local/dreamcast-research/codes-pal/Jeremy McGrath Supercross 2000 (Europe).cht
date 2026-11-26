@@ -1,0 +1,12 @@
+# Jeremy McGrath Supercross 2000 - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 1
+
+cheat0_desc = "Have 999 Points In Series Races"
+cheat0_address = "1532288"
+cheat0_value = "999"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"

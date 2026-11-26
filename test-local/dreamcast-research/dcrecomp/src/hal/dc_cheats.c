@@ -170,6 +170,18 @@ static void charge_liste_texte(void) {
     }
 }
 
+/* Lignes consecutives de meme nom (non vide) = un seul code. */
+static int meme_groupe(int a, int b) {
+    return g_codes[a].defini && g_codes[b].defini && g_codes[a].desc[0] &&
+           !strcmp(g_codes[a].desc, g_codes[b].desc);
+}
+static int debut_groupe(int i) { return i == 0 || !meme_groupe(i - 1, i); }
+static int fin_groupe(int i) {
+    int fin = i + 1;
+    while (fin < g_nb && meme_groupe(i, fin)) ++fin;
+    return fin;
+}
+
 static int charge_fichier(const char *chemin) {
     FILE *f = fopen(chemin, "rb");
     if (!f) return 0;
@@ -243,6 +255,16 @@ static void charge(void) {
         if (c->defini) ++listes;
         if (c->defini && c->enable) ++actifs;
     }
+    /* Un code a plusieurs ecritures (la vie en deux moities, par exemple)
+     * occupe des lignes consecutives de meme nom, comme RetroArch les range.
+     * Il reste entier : une seule ligne non prise en charge l'ecarte. */
+    for (int i = 0; i < g_nb; ) {
+        int fin = fin_groupe(i), entier = 1;
+        for (int k = i; k < fin; ++k) entier &= g_codes[k].compatible;
+        if (!entier)
+            for (int k = i; k < fin; ++k) { g_codes[k].compatible = 0; g_codes[k].enable = 0; }
+        i = fin;
+    }
     charge_liste_texte();
     actifs = 0;
     for (int i = 0; i < g_nb; ++i) {
@@ -314,13 +336,13 @@ int dc_cheats_active(void) { return g_actifs; }
 
 static int menu_count(void) {
     int count = 0;
-    for (int i=0; i<g_nb; ++i) if (g_codes[i].compatible) ++count;
+    for (int i=0; i<g_nb; ++i) if (g_codes[i].compatible && debut_groupe(i)) ++count;
     return count;
 }
 
 static int menu_index(int row) {
     for (int i=0; i<g_nb; ++i)
-        if (g_codes[i].compatible && row-- == 0) return i;
+        if (g_codes[i].compatible && debut_groupe(i) && row-- == 0) return i;
     return -1;
 }
 
@@ -339,8 +361,9 @@ void dc_cheats_menu_select(void) {
     if (!g_menu) return;
     int index = menu_index(g_selection);
     if (index < 0) return;
-    g_codes[index].enable = !g_codes[index].enable;
-    printf("[CHEAT] %s : %s\n", g_codes[index].desc, g_codes[index].enable ? "actif" : "inactif");
+    int active = !g_codes[index].enable, fin = fin_groupe(index);
+    for (int k = index; k < fin; ++k) g_codes[k].enable = active;
+    printf("[CHEAT] %s : %s (%d ecriture(s))\n", g_codes[index].desc, active ? "actif" : "inactif", fin - index);
 }
 const char *dc_cheats_menu_text(void) {
     static char text[1024];

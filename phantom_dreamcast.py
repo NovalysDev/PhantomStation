@@ -19,12 +19,17 @@ CODES_PREFERENCE=('europe','usa','japan')
 CODES_AUTRES_NOMS={'v rally 2':'Test Drive V-Rally'}
 # Disques déjà fournis avec leurs codes dans le projet, si la recherche par nom échoue.
 CODES_CONNUS={'0cb24122c167a4f199a8aa4408dad4eeb604a0f3':'grandia_ii_europe.cht'}
+# Codes des versions européennes (PAL), importés une fois pour toutes par
+# importer_codes_pal.py : un .cht par jeu, nommé « Titre (Europe).cht ».
+CODES_PAL=LAB/'codes-pal'
+# « Grandia II » et « Grandia 2 » désignent le même jeu (pas « V », V-Rally).
+CODES_ROMAINS={'ii':'2','iii':'3','iv':'4'}
 
 def codes_normalise(texte):
     texte=texte.lower().replace('&',' and ')
     texte=re.sub(r'\([^)]*\)',' ',texte)
     texte=re.sub(r'[^a-z0-9]+',' ',texte)
-    return re.sub(r'\s+',' ',texte).strip()
+    return ' '.join(CODES_ROMAINS.get(mot,mot) for mot in texte.split())
 
 def codes_meme_jeu(nom_fichier,titre):
     """Vrai si le nom du .cht désigne ce jeu, à la région ou aux langues près."""
@@ -74,6 +79,33 @@ def codes_region_accepte(nom,region):
     """Un fichier sans région convient ; sinon il doit viser la même version."""
     autre=codes_region_normalise(codes_region(nom))
     return autre is None or autre==codes_region_normalise(region)
+
+def codes_proche(titre,fichiers):
+    """Fichier dont le nom a les mêmes mots significatifs que le titre (« The »
+    en tête, ponctuation et mots vides mis à part), s'il est le seul aussi proche."""
+    racine=lambda mots:[mot[:-1] if len(mot)>3 and mot.endswith('s') else mot for mot in mots]
+    voulu=racine(codes_mots(titre))   # « Adventures » sur un site = « Adventure »
+    if not voulu: return None
+    chiffres=[mot for mot in voulu if mot.isdigit()]
+    scores=[]
+    for fichier in fichiers:
+        mots=racine(codes_mots(fichier.stem))
+        if not mots or [mot for mot in mots if mot.isdigit()]!=chiffres: continue
+        commun=set(voulu)&set(mots)
+        scores.append((min(len(commun)/len(set(voulu)),len(commun)/len(set(mots))),fichier.name,fichier))
+    scores.sort(key=lambda s:(-s[0],s[1]))
+    if scores and scores[0][0]>=0.75 and (len(scores)==1 or scores[0][0]>scores[1][0]): return scores[0][2]
+    return None
+
+def codes_pal(titre):
+    """Codes importés pour la version européenne de ce jeu, s'il y en a."""
+    if not CODES_PAL.is_dir(): return None
+    if codes_region_normalise(codes_region(titre) or 'europe')!='europe': return None
+    fichiers=sorted(CODES_PAL.glob('*.cht'))
+    from compilation_dossier import sans_marque   # « Disney's Dinosaur » = « Dinosaur »
+    for fichier in fichiers:
+        if codes_meme_jeu(fichier.stem,titre) or codes_meme_jeu(sans_marque(fichier.stem),titre): return fichier
+    return codes_proche(titre,fichiers)
 
 def codes_local(titre):
     """Fichier de codes déjà présent dans le projet (cache des compilations)."""
@@ -135,6 +167,8 @@ def chercher_codes(titre,demarrage=None,log=print):
     """Codes du jeu : dossier cheats du projet, puis libretro-database.
     Le fichier trouvé est joint à la compilation et gardé pour les suivantes.
     Ne bloque jamais une compilation : hors ligne, elle continue sans codes."""
+    fichier=codes_pal(titre)
+    if fichier: return fichier
     fichier=codes_local(titre)
     if fichier: return fichier
     fichier=codes_libretro(titre,log)
@@ -165,9 +199,15 @@ def build_stub(icon,output,work,background=None,generic=False,house=False):
     result=subprocess.run(cmd,capture_output=True,text=True,errors='replace',creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
     if result.returncode: raise RuntimeError('Création du lanceur Dreamcast impossible : '+result.stdout+'\n'+result.stderr)
 
-def build(image,name,output,icon=None,background=None,log=print,package_id=None):
+def build(image,name,output,icon=None,background=None,log=print,package_id=None,autres_disques=()):
     image=Path(image).resolve(strict=True);output=Path(output)
     if image.suffix.lower()!='.chd': raise ValueError('Choisis une image Dreamcast au format .chd.')
+    # Jeu sur plusieurs disques : un seul programme compilé (celui du disque 1,
+    # le même sur chaque disque), et tous les disques rangés dans le jeu.
+    autres=[Path(d).resolve(strict=True) for d in autres_disques]
+    if len(autres)>7: raise ValueError('Un jeu Dreamcast peut avoir au plus 8 disques.')
+    if any(d.suffix.lower()!='.chd' for d in autres): raise ValueError('Chaque disque doit être une image Dreamcast au format .chd.')
+    disques=[image]+autres
     output.mkdir(parents=True,exist_ok=True)
     filename=re.sub(r"[^\w. '’-]+",'-',name,flags=re.UNICODE).strip(' .') or 'Jeu Dreamcast'
     destination=output/(filename+'.exe');number=2
@@ -179,6 +219,15 @@ def build(image,name,output,icon=None,background=None,log=print,package_id=None)
             work=Path(tmp)
             spec=importlib.util.spec_from_file_location('phantom_dc_builder',LAB/'build_pal_prototype.py')
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+            if autres:
+                programmes=[]
+                for disque in disques:
+                    with module.DreamcastChd(disque,module.LibChdr(module.LIBCHDR.resolve(strict=True))) as disc:
+                        _,boot=module.identify_with_boot(disc)
+                    programmes.append(hashlib.sha1(boot).hexdigest())
+                if len(set(programmes))!=1:
+                    raise ValueError('Ces disques n’ont pas le même programme : ce ne sont pas les disques d’un même jeu.')
+                log(f'{len(disques)} disques du même jeu : programme commun, F4 changera de disque en jeu.')
             native=module.build(image,work/'native',log=log)
             prototype=json.loads((native/'prototype.json').read_text(encoding='utf-8'))
             profile=prototype['profil']
@@ -191,8 +240,12 @@ def build(image,name,output,icon=None,background=None,log=print,package_id=None)
             game_id=uuid.UUID(hex=package_id).hex if package_id else uuid.uuid4().hex
             manifest=game_id+'\ndreamcast.exe\n'+digest+'\n'+base64.b64encode(name.encode()).decode()+'\ndocuments-saves-v1\n'
             config='[game]\nname = '+json.dumps(name,ensure_ascii=False)+'\nplatform = "DC"\nprofile = '+json.dumps(profile)+'\n'
-            files=[(runtime,'dreamcast.exe'),(native/'1ST_READ.BIN','1ST_READ.BIN'),(image,'disque.chd'),(native/'SDL2.dll','SDL2.dll'),(native/'libchdr.dll','libchdr.dll'),(work/'boxart.png','assets/img/boxart.png'),(work/'boxart.tga','assets/img/boxart.tga'),(LAB/'dcrecomp/LICENSE','licences/dcrecomp-LICENSE.txt'),(LAB/'glew-2.2.0/LICENSE.txt','licences/glew-LICENSE.txt'),(LAB/'libchdr-6cde5348eb118da3baf94f75a69577a005a484fd/LICENSE.txt','licences/libchdr-LICENSE.txt'),(BASE/'n64-engine/generique/SDL2/LICENSE.txt','licences/SDL2-LICENSE.txt')]
-            codes=chercher_codes(name,native/'1ST_READ.BIN',log=log)
+            files=[(runtime,'dreamcast.exe'),(native/'1ST_READ.BIN','1ST_READ.BIN'),(image,'disque.chd')]+[(d,f'disque-{k}.chd') for k,d in enumerate(autres,2)]+[(native/'SDL2.dll','SDL2.dll'),(native/'libchdr.dll','libchdr.dll'),(work/'boxart.png','assets/img/boxart.png'),(work/'boxart.tga','assets/img/boxart.tga'),(LAB/'dcrecomp/LICENSE','licences/dcrecomp-LICENSE.txt'),(LAB/'glew-2.2.0/LICENSE.txt','licences/glew-LICENSE.txt'),(LAB/'libchdr-6cde5348eb118da3baf94f75a69577a005a484fd/LICENSE.txt','licences/libchdr-LICENSE.txt'),(BASE/'n64-engine/generique/SDL2/LICENSE.txt','licences/SDL2-LICENSE.txt')]
+            # Le titre affiché n'a plus sa région (« Re-Volt ») : celle du nom du
+            # fichier d'origine choisit la bonne version des codes (USA ≠ PAL).
+            region=codes_region(Path(image).stem)
+            titre_codes=name if codes_region(name) or not region else name+' ('+region+')'
+            codes=chercher_codes(titre_codes,native/'1ST_READ.BIN',log=log)
             if codes is not None:
                 files.append((codes,'phantom-cheats.cht'))
                 log('Codes de triche inclus : '+codes.name)
@@ -209,11 +262,11 @@ def build(image,name,output,icon=None,background=None,log=print,package_id=None)
             with zipfile.ZipFile(partial,'a',allowZip64=True) as archive:
                 archive.writestr('phantom-package.txt',manifest.encode())
                 archive.writestr('game.toml',config.encode())
-                archive.writestr(SOURCE_ENTRY,encoded_source('DC',[[image]]))
+                archive.writestr(SOURCE_ENTRY,encoded_source('DC',[[str(d) for d in disques]]))
                 archive.writestr('moteur.txt',str(prototype.get('moteur','')).encode('ascii'))
                 if appris: archive.writestr('apprentissage/disque.txt',prototype['sha1_demarrage'].encode('ascii'))
                 for path,arcname in files:
-                    archive.write(path,arcname,compress_type=zipfile.ZIP_STORED if path==image else zipfile.ZIP_DEFLATED)
+                    archive.write(path,arcname,compress_type=zipfile.ZIP_STORED if path in disques else zipfile.ZIP_DEFLATED)
             with zipfile.ZipFile(partial) as archive:
                 bad=archive.testzip()
                 if bad: raise RuntimeError('Fichier intégré endommagé : '+bad)
@@ -227,11 +280,12 @@ def build(image,name,output,icon=None,background=None,log=print,package_id=None)
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--rom',required=True);p.add_argument('--nom',required=True);p.add_argument('--sortie',required=True);p.add_argument('--icone');p.add_argument('--fond')
+    p.add_argument('--disque',action='append',default=[],help='disque suivant du même jeu (2, 3…)')
     a=p.parse_args()
     try:
         import erreurs_connues as apprentissage
         for ligne in apprentissage.preparer('DC',a.rom,a.nom): print(ligne,flush=True)
-        print('PHANTOM_DREAMCAST_RESULT='+str(build(a.rom,a.nom,a.sortie,a.icone,a.fond)),flush=True)
+        print('PHANTOM_DREAMCAST_RESULT='+str(build(a.rom,a.nom,a.sortie,a.icone,a.fond,autres_disques=a.disque)),flush=True)
     except Exception as e:
         try:
             import apprentissage as _a; print(_a.noter_echec('DC',a.rom,a.nom,str(e)),flush=True)

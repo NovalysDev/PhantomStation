@@ -11,6 +11,7 @@
 #include "hal/dc_hardware.h"
 #include "hal/dc_ralentis.h"
 #include "hal/dc_cheats.h"
+#include "hal/dc_disques.h"
 #include "recompiler/sh4_cpu.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -704,6 +705,7 @@ void pvr2_osd_frame(void) {
     const char *texte = dc_cheats_menu_text();
     int menu = texte != NULL;
     if (!texte) texte = dc_cinematic_message();
+    if (!texte) texte = dc_disques_message();
     if (!texte || !*texte) return;
     if (!g_osd_shader) return;
 

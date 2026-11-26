@@ -1,0 +1,26 @@
+# F1 RACING CHAMPIONSHIP (EUROPE) - Dreamcast, version européenne (PAL).
+# Sources : CodeBreaker all cheats 2.8.
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 3
+
+cheat0_desc = "Opponents Don't Move"
+cheat0_address = "399086"
+cheat0_value = "58113"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "Race Alone"
+cheat1_address = "2265512"
+cheat1_value = "1"
+cheat1_memory_search_size = "4"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"
+cheat2_desc = "Timer Stopped"
+cheat2_address = "67314"
+cheat2_value = "9"
+cheat2_memory_search_size = "4"
+cheat2_cheat_type = "1"
+cheat2_handler = "1"
+cheat2_enable = "false"

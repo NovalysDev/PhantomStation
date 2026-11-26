@@ -65,6 +65,17 @@ def _fermer_avec_phantomstation(job):
 DELAI_FERMETURE_FORCEE = 6.0
 
 
+def dreamcast_disc_count(exe):
+    """Nombre de disques rangés dans un jeu Dreamcast (disque.chd, disque-2.chd…) ;
+    seul le sommaire de l'archive est lu, pas les disques."""
+    try:
+        with zipfile.ZipFile(exe) as archive:
+            noms = set(archive.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return 1
+    return 1 + sum(1 for n in range(2, 9) if f'disque-{n}.chd' in noms)
+
+
 class GameInCompiler:
     def __init__(self, root, on_learning=None):
         self.root = root
@@ -189,8 +200,11 @@ class GameInCompiler:
         self.quit_button.pack(side='left', padx=(0, 10), pady=6)
         ctk.CTkLabel(toolbar, text=tr('F10 : signaler un bug'), text_color=MUTED).pack(side='right', padx=12)
         if info.get('platform') == 'DC':
-            label = 'F11 : choisir les codes' if info.get('id') == 'ce11ad99f90d49bdb4b21cd8be1829a9' else 'F11 : activer/désactiver les codes'
-            ctk.CTkLabel(toolbar, text=tr(label), text_color=MUTED).pack(side='right', padx=12)
+            # Le moteur Dreamcast ouvre un menu de choix des codes sur F11.
+            ctk.CTkLabel(toolbar, text=tr('F11 : choisir les codes'), text_color=MUTED).pack(side='right', padx=12)
+            if dreamcast_disc_count(exe) > 1:
+                # Jeu sur plusieurs disques : F4 passe au disque suivant quand le jeu le demande.
+                ctk.CTkLabel(toolbar, text=tr('F4 : changer de CD'), text_color=MUTED).pack(side='right', padx=12)
         if debug_active:
             ctk.CTkLabel(toolbar, text=tr('SAUVEGARDE DE DÉBOGAGE ACTIVE'), text_color='#f7c66b').pack(side='right', padx=12)
         elif self.trial_hash:

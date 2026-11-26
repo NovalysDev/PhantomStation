@@ -1,0 +1,19 @@
+# Sega Rally 2 - Dreamcast, version européenne (PAL).
+# Sources : bucanero.com.ar (CDX).
+# Écritures simples en RAM seulement ; codes désactivés par défaut, effet à vérifier en jeu.
+cheats = 2
+
+cheat0_desc = "All Years Unlocked"
+cheat0_address = "14113076"
+cheat0_value = "10"
+cheat0_memory_search_size = "4"
+cheat0_cheat_type = "1"
+cheat0_handler = "1"
+cheat0_enable = "false"
+cheat1_desc = "All Cars & Stages Unlocked"
+cheat1_address = "14113088"
+cheat1_value = "1048575"
+cheat1_memory_search_size = "5"
+cheat1_cheat_type = "1"
+cheat1_handler = "1"
+cheat1_enable = "false"

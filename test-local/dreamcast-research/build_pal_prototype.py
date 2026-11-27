@@ -227,7 +227,8 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
             f'{len(learned.main)} entrée(s) du programme principal.')
     boot_end=0x8c010000+len(boot)
     game=work/'game'; build_dir=work/'build'; main_cache=work/'principal'
-    options=['--irq-on-sr','--runtime-literals','--sp-loads','--setjmp-sites','--relocatable']
+    # --stable-files : entre deux essais, seuls les fichiers C changés sont recompilés.
+    options=['--irq-on-sr','--runtime-literals','--sp-loads','--setjmp-sites','--relocatable','--stable-files']
     def recompile(binary, src, inc, base, entries):
         run_command([sys.executable,LAB/'dcrecomp/tools/static_recompile.py',binary,src,inc,
                      '--base',hex(base),'--entries',entries,*options],env=env)
@@ -296,7 +297,7 @@ def build_learned(image: Path, boot: bytes, boot_path: Path, info: dict, work: P
     return exe
 
 
-LEARNING_OPTIONS = ['--irq-on-sr','--runtime-literals','--sp-loads','--setjmp-sites','--relocatable']
+LEARNING_OPTIONS = ['--irq-on-sr','--runtime-literals','--sp-loads','--setjmp-sites','--relocatable','--stable-files']
 
 
 def _translator_stamp() -> str:

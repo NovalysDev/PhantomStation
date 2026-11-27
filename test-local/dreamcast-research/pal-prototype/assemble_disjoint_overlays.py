@@ -14,7 +14,9 @@ text = dispatch.read_text(encoding='utf-8')
 entries = pattern.findall(text)
 if not entries:
     raise RuntimeError('Table du programme principal introuvable.')
-next_file = max(int(p.stem.rsplit('_',1)[1]) for p in src.glob('game_code_*.c')) + 1
+# Seuls les fichiers numérotés comptent (game_code_8C0123A0.c, game_code_fin.c
+# viennent de --stable-files).
+next_file = max((int(s) for p in src.glob('game_code_*.c') if (s := p.stem.rsplit('_',1)[1]).isdigit()), default=-1) + 1
 declarations=[]
 for overlay in (root/'overlay1', root/'overlay2'):
     extra = pattern.findall((overlay/'src/game/dispatch_table.c').read_text(encoding='utf-8'))

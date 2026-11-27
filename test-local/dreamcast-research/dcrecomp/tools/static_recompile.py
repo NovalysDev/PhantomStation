@@ -1845,8 +1845,81 @@ class SH4Recompiler:
             i += 1
         return f"#include <stdint.h>\nstatic uint32_t {entry};\n\n" + "\n".join(out)
 
+    # --stable-files : fichiers d'environ 128 fonctions (assez pour occuper
+    # tous les cœurs), jamais plus de 512.
+    STABLE_TARGET_FUNCTIONS = 128
+    STABLE_MAX_FUNCTIONS = 512
+
+    @classmethod
+    def stable_boundary(cls, addr):
+        """Vrai si un fichier se termine après la fonction à addr. Ne dépend que
+        de l'adresse : une fonction ajoutée ailleurs ne déplace aucune frontière."""
+        mixed = ((addr >> 1) * 2654435761) & 0xFFFFFFFF
+        return (mixed >> 16) % cls.STABLE_TARGET_FUNCTIONS == 0
+
+    @staticmethod
+    def own_declarations(code):
+        """Déclarations des seules fonctions nommées dans code : sans l'en-tête
+        commun game_functions.h, qui change à chaque fonction ajoutée et ferait
+        tout recompiler."""
+        names = sorted(set(re.findall(r'\bfunc_[0-9A-Fa-f]{8}\b', code)))
+        return ("void sh4_call_indirect(SH4CPU *cpu);\n"
+                "void sh4_jump_indirect(SH4CPU *cpu);\n"
+                + "".join(f"void {name}(SH4CPU *cpu);\n" for name in names))
+
+    def recompile_stable(self, output_dir):
+        """Comme recompile_all, pour l'apprentissage : entre deux essais du jeu,
+        seuls les fichiers dont le contenu change sont recompilés
+        (apprentissage.sync_tree). Chaque fichier se termine à une frontière
+        stable_boundary et porte l'adresse de sa dernière fonction ; le dernier
+        s'appelle game_code_fin.c. Une fonction découverte ne change donc que
+        son fichier (et celui d'avant, dont la dernière fonction continue dans
+        la nouvelle)."""
+        os.makedirs(output_dir, exist_ok=True)
+        sorted_funcs = sorted(self.functions.items())
+        total_funcs = len(sorted_funcs)
+        includes = ("/* Auto-generated - DO NOT EDIT */\n"
+                    "#include \"recompiler/sh4_cpu.h\"\n"
+                    "#include <math.h>\n\n")
+        light_files, chunk, files = [], [], 0
+
+        def write_chunk(name):
+            nonlocal files
+            body = []
+            for addr, code in chunk:
+                if code and len(code) > self.GIANT_FUNCTION_CHARS:
+                    heavy_name = f"game_code_lourd_{addr:08X}.c"
+                    heavy = self.guaranteed_tail_calls(code)
+                    with open(os.path.join(output_dir, heavy_name), 'w') as heavy_file:
+                        heavy_file.write(includes + self.own_declarations(heavy) + heavy + "\n")
+                    light_files.append(heavy_name)
+                    print(f"  Giant function 0x{addr:08X} ({len(code) // 1024} KB) -> {heavy_name}, built without optimisation")
+                elif code:
+                    body.append(code + "\n\n")
+            text = "".join(body)
+            with open(os.path.join(output_dir, f"game_code_{name}.c"), 'w') as f:
+                f.write(f"/* Functions 0x{chunk[0][0]:08X} - 0x{chunk[-1][0]:08X} */\n")
+                f.write(includes + self.own_declarations(text) + "\n" + text)
+            files += 1
+
+        for index, (addr, info) in enumerate(sorted_funcs):
+            next_addr = sorted_funcs[index + 1][0] if index + 1 < total_funcs else None
+            chunk.append((addr, self.recompile_function(addr, info, next_func_addr=next_addr)))
+            if self.stable_boundary(addr) or len(chunk) >= self.STABLE_MAX_FUNCTIONS:
+                write_chunk(f"{addr:08X}")
+                chunk = []
+        if chunk:
+            write_chunk("fin")
+
+        with open(os.path.join(output_dir, self.LIGHT_LIST), 'w') as f:
+            f.write("".join(name + "\n" for name in light_files))
+        print(f"Total: {files} source files (stable), {total_funcs} functions")
+        return files
+
     def recompile_all(self, output_dir, batch_size=500):
         """Recompile all functions, split into multiple source files."""
+        if STABLE_FILES:
+            return self.recompile_stable(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
         sorted_funcs = sorted(self.functions.items())
@@ -1902,6 +1975,8 @@ RUNTIME_LITERALS = False
 SP_LOADS = False
 SETJMP_SITES = False
 RELOCATABLE = False
+# --stable-files : découpage pour l'apprentissage (SH4Recompiler.recompile_stable).
+STABLE_FILES = False
 # Text added to PC-relative addresses under --relocatable.
 RELOC_TEXT = ' + sh4_reloc'
 
@@ -1947,6 +2022,9 @@ def main():
         elif arg == '--relocatable':
             global RELOCATABLE
             RELOCATABLE = True
+        elif arg == '--stable-files':
+            global STABLE_FILES
+            STABLE_FILES = True
         else:
             positional.append(arg)
 

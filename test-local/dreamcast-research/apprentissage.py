@@ -607,17 +607,31 @@ def translate_block(block: dict, work: Path, recompile, stage: Path, translator:
     _write_if_changed(stage / 'include/game' / f'learned_{key}.h',
                       '#pragma once\n#include "recompiler/sh4_cpu.h"\n' + decls)
     entries = []
-    for i, source in enumerate(sorted((out / 'src/game').glob('game_code_*.c'))):
+    # Le nom vient de celui du fichier traduit (game_code_000.c, ou
+    # game_code_8C0123A0.c avec --stable-files) : il ne change pas d'un essai à
+    # l'autre, et sync_tree ne fait recompiler que ce qui a changé.
+    legers = {n.strip() for n in (out / 'src/game/compilation-legere.txt').read_text(encoding='utf-8').split()} \
+        if (out / 'src/game/compilation-legere.txt').is_file() else set()
+    nouveaux_legers = []
+    for source in sorted((out / 'src/game').glob('game_code_*.c')):
         text = rename.sub(swap, source.read_text(encoding='utf-8'))
         text = outside.sub(lambda m: f'{{ cpu->pc = 0x{m.group(1)}u; sh4_call_indirect(cpu); }}', text)
         text = text.replace('#include "game/game_functions.h"\n',
                             f'#include "game/game_functions.h"\n#include "game/learned_{key}.h"\n', 1)
-        _write_if_changed(stage / 'src/game' / f'game_code_L{key}_{i:03d}.c', text)
+        nom = f'game_code_L{key}_{source.stem[len("game_code_"):]}.c'
+        _write_if_changed(stage / 'src/game' / nom, text)
+        if source.name in legers: nouveaux_legers.append(nom)
         for name in FUNC_DEF.findall(text):
             addr = int(name[-8:], 16)
             off = addr - block['base']
             sig = block['data'][off:off+SIGNATURE_BYTES]
             if len(sig) >= 4: entries.append((addr, name, sig))
+    if nouveaux_legers:
+        # Une fonction géante du bloc reste compilée sans optimisation (voir
+        # pal-prototype/CMakeLists.txt) : sous son nouveau nom aussi.
+        liste = stage / 'src/game/compilation-legere.txt'
+        deja = liste.read_text(encoding='utf-8').split() if liste.is_file() else []
+        _write_if_changed(liste, ''.join(n + '\n' for n in deja + [n for n in nouveaux_legers if n not in deja]))
     return entries
 
 

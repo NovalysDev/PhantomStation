@@ -19,6 +19,8 @@ file(GLOB GAME_SOURCES CONFIGURE_DEPENDS "${PAL_GENERATED_DIR}/src/game/*.c")
 # fonction de 9 Mo, 26/11/2026). Compilées sans optimisation ; leurs sauts
 # terminaux sont des musttail, de vrais sauts même en -O0.
 if(EXISTS "${PAL_GENERATED_DIR}/src/game/compilation-legere.txt")
+  # La liste peut s'allonger d'un essai d'apprentissage à l'autre : CMake la relit.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PAL_GENERATED_DIR}/src/game/compilation-legere.txt")
   file(STRINGS "${PAL_GENERATED_DIR}/src/game/compilation-legere.txt" PAL_FICHIERS_LEGERS)
   foreach(PAL_NOM IN LISTS PAL_FICHIERS_LEGERS)
     set_source_files_properties("${PAL_GENERATED_DIR}/src/game/${PAL_NOM}" PROPERTIES COMPILE_OPTIONS "-O0;-g0")

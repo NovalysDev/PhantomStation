@@ -265,8 +265,14 @@ class UniqueLauncher : Form {
         float w = art.Width*scale, h = art.Height*scale;
         g.DrawImage(art, (ClientSize.Width-w)/2, -(h-ClientSize.Height)*.42f, w, h);
         int gradientTop = ClientSize.Height * 45 / 100;
-        using (var brush = new LinearGradientBrush(new Rectangle(0,gradientTop,ClientSize.Width,ClientSize.Height-gradientTop), Color.FromArgb(10,2,5,14), Color.FromArgb(235,2,5,14), 90))
+        // GDI+ reboucle le dégradé sur son bord : sur une zone exactement de sa
+        // taille, la première ligne prend la couleur de la fin (trait noir en
+        // travers de l'écran en 1920x1080). Zone d'un pixel plus grande et bords
+        // en miroir.
+        using (var brush = new LinearGradientBrush(new Rectangle(0,gradientTop-1,ClientSize.Width,ClientSize.Height-gradientTop+2), Color.FromArgb(10,2,5,14), Color.FromArgb(235,2,5,14), 90)) {
+            brush.WrapMode = WrapMode.TileFlipXY;
             g.FillRectangle(brush,0,gradientTop,ClientSize.Width,ClientSize.Height-gradientTop);
+        }
         float layoutScale = Math.Min(ClientSize.Width / 1100f, ClientSize.Height / 650f);
         g.TranslateTransform((ClientSize.Width-1100*layoutScale)/2, (ClientSize.Height-650*layoutScale)/2);
         g.ScaleTransform(layoutScale, layoutScale);

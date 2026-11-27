@@ -28,7 +28,7 @@ For Dreamcast games opened from the library, the compiler can prepare newly disc
 
 The Dreamcast engine now handles double-precision maths and byte-sized switch tables, which fixes the Re-Volt black screen. It also emulates the sound chip's effects processor (echo, reverb) and clips loud peaks as the console does, so Ryudo's scream early in Grandia II no longer crackles. A game created earlier benefits after it is rebuilt.
 
-**New since 1.0.9** (in the source; not yet in a portable release):
+**New in 1.0.10:**
 
 - **Compile a whole folder:** the “Compile a whole folder…” button builds every game found in a folder and its subfolders, one after another. No file is skipped: every version, region and disc is built. The discs of one PS1 or Dreamcast game are grouped and built together, and archives are extracted first. Game names keep the original title, without region, language or date tags. A failed game is retried once at the end of the list.
 - **Multi-disc Dreamcast games:** all discs go into one EXE. In game, **F4** changes disc; the lid opens briefly, as on the console.
@@ -36,6 +36,8 @@ The Dreamcast engine now handles double-precision maths and byte-sized switch ta
 - **CPU and cores:** the creation screen shows the detected processor. Just below it, you choose how many cores builds use, for every console. A fifth of the threads (at least two) always stays free for Windows. PhantomStation never starts more than one C compilation per 2 GB of memory.
 - **Stuck builds:** a Dreamcast function larger than 1 MB of C is compiled on its own, without optimisation, with guaranteed tail calls. A build that exceeds its time limit now stops all of its processes.
 - **Dreamcast builds twice as fast:** between two learning runs of the game, only the C files touched by newly found code are rebuilt. The files are also smaller, so every core stays busy. South Park Rally: 14 min 30 instead of 28 min; each rebuild after a run takes 6 to 11 s instead of about 3 min.
+- **Smoother library:** game cards are drawn once as images and cached; scrolling is more than 3 times faster and the page opens faster.
+- **Intro screen:** the black line across the screen at 1920×1080 is gone (for an existing game, after it is rebuilt).
 
 **Dreamcast games built locally (27 November 2026):** 38 games, 39 EXEs (Unreal Tournament in both its European and US versions), have been built on the author’s PC: 102 Dalmatians: Puppies to the Rescue, Alone in the Dark: The New Nightmare, Chicken Run, Crazy Taxi 2, Dead or Alive 2, Dino Crisis, F355 Challenge: Passione Rossa, Grand Theft Auto 2, Grandia II, Jet Set Radio, Mortal Kombat Gold, Nightmare Creatures II, Quake III Arena, Rayman 2: The Great Escape, Re-Volt, Ready 2 Rumble Boxing, Resident Evil Code: Veronica, Sega GT, Sega Rally 2, Shenmue, Shenmue II, Sonic Adventure, Sonic Adventure 2, Soul Fighter, South Park Rally, Star Wars Episode I: Jedi Power Battles, Star Wars Episode I: Racer, The House of the Dead 2, Tom Clancy's Rainbow Six: Rogue Spear + Mission Pack: Urban Operations, Tomb Raider: La Révélation finale, Tomb Raider : Sur les traces de Lara Croft, Tomb Raider Chronicles, Tony Hawk's Pro Skater 2, Toy Commander, Toy Story 2: Buzz l'Éclair à la rescousse !, Unreal Tournament, V-Rally 2: Expert Edition, Vigilante 8: 2nd Offense. This list only records successful builds: it does not prove that each game can be completed.
 

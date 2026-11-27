@@ -28,7 +28,7 @@ For Dreamcast games opened from the library, the compiler can prepare newly disc
 
 The Dreamcast engine now handles double-precision maths and byte-sized switch tables, which fixes the Re-Volt black screen. It also emulates the sound chip's effects processor (echo, reverb) and clips loud peaks as the console does, so Ryudo's scream early in Grandia II no longer crackles. A game created earlier benefits after it is rebuilt.
 
-**New since 1.0.9** (in the source; not yet in a portable release):
+**New in 1.0.10:**
 
 - **Compile a whole folder:** the “Compile a whole folder…” button builds every game found in a folder and its subfolders, one after another. No file is skipped: every version, region and disc is built. The discs of one PS1 or Dreamcast game are grouped and built together, and archives are extracted first. Game names keep the original title, without region, language or date tags. A failed game is retried once at the end of the list.
 - **Multi-disc Dreamcast games:** all discs go into one EXE. In game, **F4** changes disc; the lid opens briefly, as on the console.

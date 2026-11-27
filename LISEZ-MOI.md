@@ -10,7 +10,7 @@ Le moteur Dreamcast gère maintenant les calculs en double précision et les tab
 
 Pour les jeux Dreamcast ouverts depuis la bibliothèque, PhantomStation vérifie les nouveaux appels rencontrés après la fermeture de la partie, y compris quand plusieurs programmes utilisent la même adresse. S’il en trouve, il prépare une version d’essai en arrière-plan et vérifie son démarrage. Lors d’une partie suivante, la fenêtre indique que cette version est à l’essai. Après utilisation, elle est conservée automatiquement et les nouveaux appels peuvent être préparés à leur tour. Le jeu ne peut pas encore intégrer ces fonctions au milieu de la partie ; ni le démarrage ni la conservation automatique ne prouvent qu’un boss apparaît.
 
-**Nouveautés depuis la 1.0.9** (dans les sources ; pas encore dans une version portable) :
+**Nouveautés de la 1.0.10** :
 
 - **Compiler tout un dossier** : le bouton « Compiler tout un dossier… » compile, l’un après l’autre, tous les jeux d’un dossier et de ses sous-dossiers. Aucun fichier n’est ignoré : chaque version, région et disque est compilé. Les disques d’un même jeu PS1 ou Dreamcast sont regroupés et compilés ensemble, et les archives sont extraites avant la compilation. Le nom du jeu reprend le titre d’origine, sans région, langue ni date. Un jeu en échec est retenté une fois en fin de liste.
 - **Jeux Dreamcast sur plusieurs disques** : tous les disques vont dans le même EXE. En jeu, **F4** change de CD ; le capot s’ouvre un court instant, comme sur la console.

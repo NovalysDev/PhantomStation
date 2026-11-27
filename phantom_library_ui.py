@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 from PIL import Image
 
-from phantom_ui import ctk, button, panel, tr, load_language, BASE, BG, SURFACE, CARD, BORDER, TEXT, MUTED, ACCENT
+from phantom_ui import ctk, button, panel, tr, load_language, BASE, BG, SURFACE, CARD, BORDER, TEXT, MUTED, ACCENT, ACCENT_HOVER
 from phantom_window_icon import set_window_icon
 from bibliotheque import (discover_games, register_game, game_info, save_directory,
                           backup_saves, restore_saves, documents_folder, active_page, switch_page, rename_game)
@@ -65,11 +65,21 @@ class LibraryView(ctk.CTkFrame):
         self.card_limit_label = ctk.CTkLabel(self.card_bar, textvariable=self.card_limit, text_color=MUTED, font=('Segoe UI', 10), anchor='w')
         self.note = tk.StringVar(value='')
         ctk.CTkLabel(self, textvariable=self.note, text_color=MUTED, font=('Segoe UI', 11), anchor='w').pack(fill='x', pady=(0, 10))
-        self.cards = ctk.CTkScrollableFrame(self, fg_color='transparent', corner_radius=0,
-                                             scrollbar_button_color='#28445e', scrollbar_button_hover_color='#3b728c')
-        self.cards.pack(fill='both', expand=True)
-        self.cards.grid_columnconfigure(0, weight=1, uniform='games')
-        self.cards.grid_columnconfigure(1, weight=1, uniform='games')
+        # Les cartes des jeux sont dessinées une fois en images (gardées en
+        # cache) sur un seul canevas : défiler ne fait que déplacer ces images,
+        # au lieu de redessiner une douzaine de widgets par jeu.
+        zone = ctk.CTkFrame(self, fg_color='transparent')
+        zone.pack(fill='both', expand=True)
+        self.scroll_canvas = tk.Canvas(zone, bg=BG, highlightthickness=0, bd=0, yscrollincrement=1)
+        self.scrollbar = ctk.CTkScrollbar(zone, command=self.scroll_canvas.yview,
+                                          button_color='#28445e', button_hover_color='#3b728c')
+        self.scrollbar.pack(side='right', fill='y')
+        self.scroll_canvas.pack(side='left', fill='both', expand=True)
+        self.scroll_canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.scroll_canvas.bind('<Configure>', lambda event: self._schedule_layout())
+        self.scroll_canvas.bind('<MouseWheel>', self._wheel)
+        self._layout_job = None
+        self._layout_width = 0
         self.after_idle(self.refresh)
 
     def set_platform(self, platform):
@@ -193,58 +203,184 @@ class LibraryView(ctk.CTkFrame):
         if self.operation_active():
             self.note.set(tr('Déplacement des jeux en cours…'))
             return
-        for child in self.cards.winfo_children(): child.destroy()
-        self.images = []
         self.refresh_cards()
+        # Même console (renommage, suppression…) : la liste reste où elle était.
+        position = self.scroll_canvas.yview()[0] if getattr(self, '_shown_platform', None) == self.platform else 0
+        self._shown_platform = self.platform
         self.games = [game for game in discover_games(self.output_directory()) if game.get('platform', 'PS1') == self.platform]
         if not self.games:
             self.note.set(('No ' + self.platform + ' games found. Create a game or use “Add a game”.') if load_language() == 'en'
                           else ('Aucun jeu ' + self.platform + ' trouvé. Crée un jeu ou utilise « Ajouter un jeu ».'))
+            self.layout_cards()
             return
         self.note.set((f'{len(self.games)} {self.platform} games  ·  Saves only: backed up before launch if changed.') if load_language() == 'en'
                       else f'{len(self.games)} jeux {self.platform}  ·  Sauvegardes uniquement : copie avant le lancement si elles ont changé.')
-        for index, game in enumerate(self.games):
+        for game in self.games:
             try: register_game(game['path'])
             except OSError: pass
-            self.add_card(game, index)
+        self.layout_cards()
+        self.scroll_canvas.yview_moveto(position)
 
-    def add_card(self, game, index):
-        card = panel(self.cards)
-        card.grid(row=index//2, column=index%2, sticky='nsew', padx=(0, 7) if index%2 == 0 else (7, 0), pady=(0, 14))
-        body = ctk.CTkFrame(card, fg_color='transparent')
-        body.pack(fill='both', expand=True, padx=14, pady=14)
+    # --- Cartes dessinées en images -------------------------------------------
+
+    _card_cache = {}      # carte déjà dessinée : (jeu, largeur, échelle, langue) -> (image, hauteur)
+    _button_cache = {}    # bouton déjà dessiné : (texte, largeur, principal, survol, échelle) -> image
+
+    def _scale(self):
+        try: return self._get_widget_scaling()
+        except AttributeError: return 1.0
+
+    @staticmethod
+    def _font(size, bold=False):
+        from PIL import ImageFont
+        windows = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Fonts'
+        try: return ImageFont.truetype(str(windows / ('segoeuib.ttf' if bold else 'segoeui.ttf')), max(1, round(size)))
+        except OSError: return ImageFont.load_default()
+
+    @staticmethod
+    def _wrap(text, font, width):
+        """Lignes de text tenant dans width pixels (coupe aux espaces)."""
+        lines, line = [], ''
+        for word in text.split():
+            candidate = (line + ' ' + word).strip()
+            if line and font.getlength(candidate) > width:
+                lines.append(line); line = word
+            else:
+                line = candidate
+        return lines + ([line] if line else []) or ['']
+
+    def _button_image(self, text, width, primary, hover, s):
+        """Bouton dessiné comme ceux de phantom_ui.button (36 de haut, coins de 12)."""
+        key = (text, width, primary, hover, s)
+        if key in self._button_cache: return self._button_cache[key]
+        from PIL import ImageDraw, ImageTk
+        w, h, q = max(1, round(width * s)), max(1, round(36 * s)), 3
+        color = (ACCENT_HOVER if hover else ACCENT) if primary else ('#31516b' if hover else '#20334b')
+        # Image opaque (coins sur le fond de la carte) : Tk l'affiche sans mélange
+        # de transparence, bien plus vite pendant le défilement.
+        shape = Image.new('RGB', (w * q, h * q), SURFACE)
+        ImageDraw.Draw(shape).rounded_rectangle((0, 0, w * q - 1, h * q - 1), radius=round(12 * s * q), fill=color)
+        font = self._font(12 * s, bold=primary)
+        label = text.lstrip('▶').strip()
+        icon = round(10 * s) if text.startswith('▶') else 0
+        gap = round(8 * s) if icon else 0
+        total = icon + gap + font.getlength(label)
+        x = (w - total) / 2
+        if icon:   # le triangle de « Ouvrir le lanceur », lissé comme le fond
+            cy = h * q / 2
+            ImageDraw.Draw(shape).polygon([(x * q, cy - icon * q / 2), (x * q, cy + icon * q / 2), ((x + icon * 0.9) * q, cy)], fill='#ffffff')
+        image = shape.resize((w, h), Image.Resampling.LANCZOS)
+        ImageDraw.Draw(image).text((x + icon + gap, h / 2), label, font=font, fill='#ffffff', anchor='lm')
+        photo = ImageTk.PhotoImage(image, master=self)
+        self._button_cache[key] = photo
+        return photo
+
+    def _buttons(self):
+        return [('play', tr('▶  Ouvrir le lanceur'), 148, True, self.play),
+                ('saves', tr('Sauvegardes'), 105, False, self.save_menu),
+                ('rename', tr('Renommer'), 105, False, self.rename),
+                ('delete', tr('Supprimer'), 105, False, self.delete_game)]
+
+    def _card_layout(self, s):
+        """Position des 4 boutons dans la carte, comme l'ancienne mise en page."""
+        x0 = round((14 + 105 + 13) * s)
+        return {'play': (x0, 0), 'saves': (x0 + round((148 + 7) * s), 0),
+                'rename': (x0, round(43 * s)), 'delete': (x0 + round((105 + 7) * s), round(43 * s))}
+
+    def _card_image(self, game, width, s):
+        """Image d'une carte (fond, jaquette, textes) ; les boutons sont posés
+        par-dessus pour réagir au survol. Renvoie (image, hauteur, y des boutons)."""
+        try:
+            stat = game['path'].stat(); stamp = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            stamp = None
+        language = load_language()
+        key = (str(game['path']), game['name'], game.get('serial'), stamp, width, s, language)
+        if key in self._card_cache: return self._card_cache[key]
+        from PIL import ImageDraw, ImageTk
+        platform = game.get('platform', 'PS1')
+        pad, cover_w, cover_h = round(14 * s), round(105 * s), round(145 * s)
+        text_x = pad + cover_w + round(13 * s)
+        text_w = max(1, width - text_x - pad)
+        console = ('SEGA  ·  ' if platform == 'DC' else 'NINTENDO  ·  ' if platform in ('NES', 'SNES', 'N64') else 'PLAYSTATION  ·  ') + platform
+        console += '  ·  ' + game['serial'] if game['serial'] else ''
+        hint = tr('Vidéo et son expérimental dans le lanceur.' if platform == 'DC' else
+                  'Réglages et commandes : F10 pendant le jeu.' if platform == 'N64' else
+                  'Réglages et commandes : F2 pendant le jeu.' if platform in ('NES', 'SNES') else
+                  'Codes, vidéo et commandes dans le lanceur.')
+        small, title_font, small_regular = self._font(9 * s, True), self._font(14 * s, True), self._font(9 * s)
+        title_lines = self._wrap(game['name'], title_font, min(text_w, round(230 * s)))
+        hint_lines = self._wrap(hint, small_regular, min(text_w, round(260 * s)))
+        small_h, title_h = round(13 * s), round(20 * s)
+        y_title = pad + small_h + round(4 * s)
+        y_buttons = y_title + title_h * len(title_lines) + round(7 * s)
+        y_hint = y_buttons + round((36 + 7 + 36 + 7) * s)
+        height = max(pad + cover_h + pad, y_hint + small_h * len(hint_lines) + pad)
+        # Fond arrondi lissé (dessiné 3 fois plus grand puis réduit), comme phantom_ui.panel.
+        q = 3
+        shape = Image.new('RGBA', (width * q, height * q), BG)
+        ImageDraw.Draw(shape).rounded_rectangle((0, 0, width * q - 1, height * q - 1), radius=round(20 * s * q),
+                                                fill=SURFACE, outline=BORDER, width=max(1, round(s * q)))
+        card = shape.resize((width, height), Image.Resampling.LANCZOS)
         source = game['cover']
         if source is None:
             with Image.open(BASE / 'assets' / 'phantomstation-symboles.png') as im: source = im.convert('RGBA')
-        source = source.copy()
-        source.thumbnail((105, 145), Image.Resampling.LANCZOS)
-        art = Image.new('RGBA', (105, 145), '#1c3048')
-        art.alpha_composite(source, ((105-source.width)//2, (145-source.height)//2))
-        photo = ctk.CTkImage(light_image=art, dark_image=art, size=(105, 145))
-        self.images.append(photo)
-        ctk.CTkLabel(body, text='', image=photo).pack(side='left', padx=(0, 13))
-        details = ctk.CTkFrame(body, fg_color='transparent')
-        details.pack(side='left', fill='both', expand=True)
-        platform = game.get('platform', 'PS1')
-        console = ('SEGA  ·  ' if platform == 'DC' else 'NINTENDO  ·  ' if platform in ('NES', 'SNES', 'N64') else 'PLAYSTATION  ·  ') + platform
-        ctk.CTkLabel(details, text=console + ('  ·  ' + game['serial'] if game['serial'] else ''), text_color='#69dcec', font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
-        game_title = ctk.CTkLabel(details, text=game['name'], text_color=TEXT, font=('Segoe UI', 14, 'bold'), anchor='w', wraplength=230, justify='left')
-        game_title._phantom_no_translate = True
-        game_title.pack(fill='x', pady=(4, 7))
-        actions = ctk.CTkFrame(details, fg_color='transparent')
-        actions.pack(anchor='w')
-        button(actions, '▶  Ouvrir le lanceur', lambda g=game: self.play(g), primary=True, width=148).pack(side='left')
-        button(actions, 'Sauvegardes', lambda g=game: self.save_menu(g), width=105).pack(side='left', padx=(7, 0))
-        manage = ctk.CTkFrame(details, fg_color='transparent')
-        manage.pack(anchor='w', pady=(7, 0))
-        button(manage, 'Renommer', lambda g=game: self.rename(g), width=105).pack(side='left')
-        button(manage, 'Supprimer', lambda g=game: self.delete_game(g), width=105).pack(side='left', padx=(7, 0))
-        hint = tr('Vidéo et son expérimental dans le lanceur.' if platform == 'DC' else
-                'Réglages et commandes : F10 pendant le jeu.' if platform == 'N64' else
-                'Réglages et commandes : F2 pendant le jeu.' if platform in ('NES', 'SNES') else
-                'Codes, vidéo et commandes dans le lanceur.')
-        ctk.CTkLabel(details, text=hint, text_color=MUTED,
-                     font=('Segoe UI', 9), anchor='w', wraplength=260, justify='left').pack(fill='x', pady=(7, 0))
+        source = source.copy().convert('RGBA')
+        source.thumbnail((cover_w, cover_h), Image.Resampling.LANCZOS)
+        art = Image.new('RGBA', (cover_w, cover_h), '#1c3048')
+        art.alpha_composite(source, ((cover_w - source.width) // 2, (cover_h - source.height) // 2))
+        card.alpha_composite(art, (pad, (height - cover_h) // 2))
+        draw = ImageDraw.Draw(card)
+        draw.text((text_x, pad), console, font=small, fill='#69dcec')
+        for i, line in enumerate(title_lines):
+            draw.text((text_x, y_title + i * title_h), line, font=title_font, fill=TEXT)
+        for i, line in enumerate(hint_lines):
+            draw.text((text_x, y_hint + i * small_h), line, font=small_regular, fill=MUTED)
+        result = (ImageTk.PhotoImage(card.convert('RGB'), master=self), height, y_buttons)   # opaque : défilement rapide
+        if len(self._card_cache) > 400: self._card_cache.clear()
+        self._card_cache[key] = result
+        return result
+
+    def _schedule_layout(self):
+        if self._layout_job is not None: self.after_cancel(self._layout_job)
+        self._layout_job = self.after(60, self.layout_cards)
+
+    def layout_cards(self):
+        """Place les cartes sur deux colonnes ; ne redessine que si la largeur a changé."""
+        self._layout_job = None
+        canvas = self.scroll_canvas
+        canvas.delete('all')
+        if not self.games:
+            canvas.configure(scrollregion=(0, 0, 1, 1))
+            return
+        s = self._scale()
+        total = max(1, canvas.winfo_width())
+        gap = round(14 * s)
+        width = max(round(300 * s), (total - gap) // 2)
+        self._layout_width = total
+        layout = self._card_layout(s)
+        y = 0
+        for row in range(0, len(self.games), 2):
+            pair = self.games[row:row + 2]
+            images = [self._card_image(game, width, s) for game in pair]
+            for column, (game, (photo, height, y_buttons)) in enumerate(zip(pair, images)):
+                x = column * (width + gap)
+                canvas.create_image(x, y, image=photo, anchor='nw')
+                for name, text, button_width, primary, action in self._buttons():
+                    bx, by = layout[name]
+                    normal = self._button_image(text, button_width, primary, False, s)
+                    hover = self._button_image(text, button_width, primary, True, s)
+                    item = canvas.create_image(x + bx, y + y_buttons + by, image=normal, anchor='nw')
+                    canvas.tag_bind(item, '<Enter>', lambda e, i=item, h=hover: (canvas.itemconfigure(i, image=h), canvas.configure(cursor='hand2')))
+                    canvas.tag_bind(item, '<Leave>', lambda e, i=item, n=normal: (canvas.itemconfigure(i, image=n), canvas.configure(cursor='')))
+                    canvas.tag_bind(item, '<ButtonRelease-1>', lambda e, a=action, g=game: a(g))
+            y += max(height for _, height, _ in images) + gap
+        canvas.configure(scrollregion=(0, 0, total, max(1, y - gap)))
+
+    def _wheel(self, event):
+        top, bottom = self.scroll_canvas.yview()
+        if (top, bottom) != (0.0, 1.0):
+            self.scroll_canvas.yview_scroll(-int(event.delta / 6 * self._scale()), 'units')
 
     def add_game(self):
         if self.operation_active():
